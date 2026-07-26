@@ -79,6 +79,8 @@ namespace Terraria1456Toolkit
 		private int _selectedRemotePlayerIndex = -1;
 		private int _selectedRemoteSlot = -1;
 		private int _slowTick;
+		private int _lastItemIconGeneration;
+		private bool _waitingStatusShown;
 		private bool _refreshingRemotePlayers;
 		private readonly List<RemoteInventorySnapshot> _remoteInventories =
 			new List<RemoteInventorySnapshot>();
@@ -218,62 +220,80 @@ namespace Terraria1456Toolkit
 		private TabPage BuildBasicPage()
 		{
 			TabPage page = NewPage("基本修改");
-			FlowLayoutPanel flow = new FlowLayoutPanel();
-			flow.Dock = DockStyle.Fill;
-			flow.FlowDirection = FlowDirection.TopDown;
-			flow.WrapContents = false;
-			flow.AutoScroll = true;
-			flow.Padding = new Padding(22);
-			page.Controls.Add(flow);
+			TableLayoutPanel layout = new TableLayoutPanel();
+			layout.Dock = DockStyle.Fill;
+			layout.AutoScroll = true;
+			layout.Padding = new Padding(14, 12, 14, 16);
+			layout.ColumnCount = 2;
+			layout.RowCount = 4;
+			layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+			layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+			layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
+			layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+			layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+			layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+			page.Controls.Add(layout);
 
 			Label title = new Label();
-			title.Text = "基础修改功能（直接适配 1.4.5.6 玩家字段）";
+			title.Text = "基础修改功能（原版 Terraria 游戏主线程 Hook）";
 			title.Font = new Font(Font, FontStyle.Bold);
-			title.AutoSize = true;
-			title.Margin = new Padding(3, 3, 3, 15);
-			flow.Controls.Add(title);
+			title.Dock = DockStyle.Fill;
+			title.TextAlign = ContentAlignment.MiddleLeft;
+			title.Margin = new Padding(6, 0, 6, 6);
+			layout.Controls.Add(title, 0, 0);
+			layout.SetColumnSpan(title, 2);
 
-			_godMode = AddOption(flow, "无敌（旅途上帝模式 + 免伤 + 自动补满）");
-			_infiniteLife = AddOption(flow, "生命锁定（每帧回满）");
-			_instantRespawn = AddOption(flow, "秒重生（死亡后下一帧复活）");
-			_infiniteMana = AddOption(flow, "无限魔力");
-			_infiniteBreath = AddOption(flow, "无限氧气");
-			_noPotionCooldown = AddOption(flow, "无药水冷却");
-			_clearDebuffs = AddOption(flow, "清除负面状态");
-			_noKnockback = AddOption(flow, "免疫击退");
-			_noFallDamage = AddOption(flow, "免疫摔落伤害");
-			_lavaImmune = AddOption(flow, "熔岩免疫");
+			FlowLayoutPanel survival = AddFeatureSection(
+				layout, "生存与防护", 0, 1);
+			FlowLayoutPanel movement = AddFeatureSection(
+				layout, "移动与物理", 1, 1);
+			FlowLayoutPanel world = AddFeatureSection(
+				layout, "世界、视野与建造", 0, 2);
+			FlowLayoutPanel combat = AddFeatureSection(
+				layout, "战斗与特殊状态", 1, 2);
+
+			_godMode = AddOption(survival, "无敌（上帝模式 + 持续免伤 + 状态回满）");
+			_infiniteLife = AddOption(survival, "生命锁定（每帧回满）");
+			_instantRespawn = AddOption(survival, "秒重生（死亡后下一帧复活）");
+			_infiniteMana = AddOption(survival, "无限魔力");
+			_infiniteBreath = AddOption(survival, "无限氧气");
+			_noPotionCooldown = AddOption(survival, "无药水冷却");
+			_clearDebuffs = AddOption(survival, "清除负面状态");
+			_noKnockback = AddOption(survival, "免疫击退");
+			_noFallDamage = AddOption(survival, "免疫摔落伤害");
+			_lavaImmune = AddOption(survival, "熔岩免疫");
 			_fastMovement = AddAdjustableOption(
-				flow,
+				movement,
 				"高速移动",
 				"移动倍率",
 				3.0M,
 				out _fastMovementMultiplier);
 			_highJump = AddAdjustableOption(
-				flow,
+				movement,
 				"高跳",
-				"高度倍率",
+				"跳跃高度倍率",
 				2.5M,
 				out _highJumpMultiplier);
 			_adjustableStep = AddStepOption(
-				flow,
-				"可调 Step",
+				movement,
+				"可调 Step（自动走上完整方块）",
 				"最大整格数",
 				3M,
 				out _stepBlocks);
-			_infiniteFlight = AddOption(flow, "无限翅膀/火箭时间");
+			_infiniteFlight = AddOption(movement, "无限翅膀/火箭时间");
 			_fullBright = AddOption(
-				flow,
+				world,
 				"场景全亮（Fullbright，不再受地下黑暗影响）");
 			_unrestrictedView = AddOption(
-				flow,
+				world,
 				"解除放大/缩小按键限制（使用游戏原有 ZoomIn / ZoomOut 键）");
 			_concurrentAttack = AddOption(
-				flow,
+				combat,
 				"并发攻击（松开后再次按下可提前触发，已有弹射物不会清除）");
 
 			_mapRevealButton = new Button();
 			_mapRevealButton.Text = "点亮整个地图";
+			StyleDarkButton(_mapRevealButton);
 			_mapRevealButton.AutoSize = true;
 			_mapRevealButton.MinimumSize = new Size(150, 32);
 			_mapRevealButton.Margin = new Padding(3, 12, 3, 2);
@@ -288,7 +308,7 @@ namespace Terraria1456Toolkit
 					_mapRevealStatusLabel.Text = "已提交到游戏主线程……";
 				}
 			};
-			flow.Controls.Add(_mapRevealButton);
+			world.Controls.Add(_mapRevealButton);
 
 			_mapRevealStatusLabel = new Label();
 			_mapRevealStatusLabel.AutoSize = true;
@@ -296,15 +316,21 @@ namespace Terraria1456Toolkit
 			_mapRevealStatusLabel.Text =
 				"地图点亮会分批扫描当前世界，不会卡住界面。";
 			_mapRevealStatusLabel.Margin = new Padding(3, 2, 3, 3);
-			flow.Controls.Add(_mapRevealStatusLabel);
+			world.Controls.Add(_mapRevealStatusLabel);
 
 			Label note = new Label();
+			note.Dock = DockStyle.Fill;
 			note.AutoSize = true;
-			note.MaximumSize = new Size(780, 0);
-			note.Margin = new Padding(3, 18, 3, 3);
+			note.MaximumSize = new Size(1100, 0);
+			note.Padding = new Padding(10, 9, 10, 9);
+			note.Margin = new Padding(6, 10, 6, 4);
 			note.ForeColor = Color.Gainsboro;
-			note.Text = "这些选项不再使用旧修改器的代码特征扫描，因此不会因为 1.4.5.6 更新后指令地址变化而自动失效。并发攻击会正常消耗弹药/魔力。";
-			flow.Controls.Add(note);
+			note.BackColor = Color.FromArgb(38, 41, 48);
+			note.Text =
+				"原版和 tModLoader 现在使用相同的分区布局。这里显示原版后端可用功能；" +
+				"仅依赖 tModLoader 或模组的功能只会出现在 tML 后端。";
+			layout.Controls.Add(note, 0, 3);
+			layout.SetColumnSpan(note, 2);
 			return page;
 		}
 
@@ -1053,18 +1079,40 @@ namespace Terraria1456Toolkit
 			try {
 				ApplyCheats();
 				UpdateMapRevealUi();
+				int iconGeneration = _game.ItemIconGeneration;
+				if (iconGeneration != _lastItemIconGeneration) {
+					_lastItemIconGeneration = iconGeneration;
+					if (_inventoryGrid != null)
+						_inventoryGrid.Invalidate();
+					if (_editorInventoryGrid != null)
+						_editorInventoryGrid.Invalidate();
+					if (_remoteInventoryGrid != null)
+						_remoteInventoryGrid.Invalidate();
+				}
 				if (!_game.IsGameThreadResponsive) {
+					_waitingStatusShown = true;
 					_statusLabel.Text =
 						"游戏主线程已暂停（单人失去焦点时正常）；切回游戏后会自动恢复。";
 					return;
 				}
 				if (!_game.IsWorldReady) {
+					_waitingStatusShown = true;
 					_statusLabel.Text =
 						string.IsNullOrEmpty(_game.LastGameThreadError)
 							? "游戏线程已连接，等待进入世界……"
 							: "等待世界初始化：" +
 								_game.LastGameThreadError;
 					return;
+				}
+				if (_waitingStatusShown) {
+					_waitingStatusShown = false;
+					object player = _game.GetLocalPlayer();
+					_statusLabel.Text =
+						"已进入世界并连接游戏线程" +
+						(player == null
+							? "。"
+							: "；当前玩家：" +
+								_game.GetPlayerName(player) + "。");
 				}
 				TrackHeldItems();
 				if (++_slowTick >= 30) {
@@ -1538,6 +1586,37 @@ namespace Terraria1456Toolkit
 			return page;
 		}
 
+		private static FlowLayoutPanel AddFeatureSection(
+			TableLayoutPanel layout,
+			string title,
+			int column,
+			int row)
+		{
+			GroupBox section = new GroupBox();
+			section.Text = title;
+			section.Dock = DockStyle.Fill;
+			section.AutoSize = true;
+			section.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+			section.Margin = new Padding(6);
+			section.Padding = new Padding(10, 8, 10, 10);
+			section.ForeColor = Color.WhiteSmoke;
+			section.BackColor = Color.FromArgb(34, 36, 42);
+
+			FlowLayoutPanel content = new FlowLayoutPanel();
+			content.Dock = DockStyle.Top;
+			content.AutoSize = true;
+			content.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+			content.FlowDirection = FlowDirection.TopDown;
+			content.WrapContents = false;
+			content.Margin = Padding.Empty;
+			content.Padding = new Padding(2, 5, 2, 2);
+			content.BackColor = Color.Transparent;
+			section.Controls.Add(content);
+
+			layout.Controls.Add(section, column, row);
+			return content;
+		}
+
 		private static CheckBox AddOption(Control parent, string text)
 		{
 			CheckBox option = new CheckBox();
@@ -1651,8 +1730,26 @@ namespace Terraria1456Toolkit
 			Button button = new Button();
 			button.Text = text;
 			button.SetBounds(x, y, width, 32);
-			button.FlatStyle = FlatStyle.Flat;
+			StyleDarkButton(button);
 			return button;
+		}
+
+		private static void StyleDarkButton(Button button)
+		{
+			if (button == null)
+				return;
+			button.UseVisualStyleBackColor = false;
+			button.FlatStyle = FlatStyle.Flat;
+			button.BackColor = Color.FromArgb(54, 61, 76);
+			button.ForeColor = Color.White;
+			button.FlatAppearance.BorderColor =
+				Color.FromArgb(110, 125, 156);
+			button.FlatAppearance.MouseOverBackColor =
+				Color.FromArgb(69, 84, 112);
+			button.FlatAppearance.MouseDownBackColor =
+				Color.FromArgb(82, 100, 136);
+			button.FlatAppearance.CheckedBackColor =
+				Color.FromArgb(82, 100, 136);
 		}
 
 		private static DataGridView CreateGrid()

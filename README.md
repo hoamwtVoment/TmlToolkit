@@ -52,6 +52,7 @@ Windows 平台的 Terraria 原版与 tModLoader 双兼容修改器。项目采�
 - 获取游戏中的全部物品 ID、名称和内部名。
 - 按 ID、中文名、英文名或内部名搜索。
 - 查看并编辑玩家背包槽位。
+- 原版背包图标直接从游戏 XNB 内容文件进行 CPU 解码，不依赖显卡贴图回读。
 - 修改数量、伤害、暴击、击退、使用时间、动画、射弹速度、尺寸倍率等属性。
 - 根据当前物品列出实际可用的原版与模组前缀。
 - 应用前缀、清除前缀和随机重铸。
@@ -85,6 +86,23 @@ Windows 平台的 Terraria 原版与 tModLoader 双兼容修改器。项目采�
   /noconfig '@ui.rsp'
 ```
 
+### 重新编译原版托管界面
+
+```powershell
+$csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe"
+$root = (Get-Location).Path
+& $csc /nologo /target:library /platform:anycpu /optimize+ `
+  "/out:$root\Vanilla1456Toolkit\Terraria1456Toolkit.Managed.dll" `
+  /reference:System.dll /reference:System.Core.dll `
+  /reference:System.Drawing.dll /reference:System.Windows.Forms.dll `
+  "/resource:$root\Vanilla1456Toolkit\items.tsv,Terraria1456Toolkit.items.tsv" `
+  "$root\Vanilla1456Toolkit\EntryPoint.cs" `
+  "$root\Vanilla1456Toolkit\TrainerForm.cs" `
+  "$root\Vanilla1456Toolkit\InventorySlotGrid.cs" `
+  "$root\Vanilla1456Toolkit\VanillaGameApi.cs" `
+  "$root\Vanilla1456Toolkit\VanillaXnbTextureDecoder.cs"
+```
+
 ### 生成双兼容整合包
 
 ```powershell
@@ -107,6 +125,7 @@ Windows 平台的 Terraria 原版与 tModLoader 双兼容修改器。项目采�
 | `TmlTrainerForm.cs` | tModLoader 修改器主界面与功能 Hook |
 | `TmlInventorySlotGrid.cs` | 背包槽位和物品图标控件 |
 | `Vanilla1456Toolkit/` | Terraria 1.4.5.6 原版后端 |
+| `Vanilla1456Toolkit/VanillaXnbTextureDecoder.cs` | 原版物品 XNB 的 CPU 解压与贴图转换 |
 | `BUILD_COMBINED.ps1` | 双兼容 EXE 打包脚本 |
 | `CODE_FILES.md` | 代码文件清单 |
 

@@ -1,10 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Drawing.Imaging;
+using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Terraria1456Toolkit
@@ -59,6 +58,9 @@ namespace Terraria1456Toolkit
 		}
 
 		private readonly Assembly _terrariaAssembly;
+		private readonly string _terrariaDirectory;
+		private readonly FieldInfo _mainInstance;
+		private readonly FieldInfo _gameMenu;
 		private readonly FieldInfo _players;
 		private readonly FieldInfo _myPlayer;
 		private readonly FieldInfo _netMode;
@@ -106,12 +108,18 @@ namespace Terraria1456Toolkit
 
 		private readonly Dictionary<string, FieldInfo> _playerFields = new Dictionary<string, FieldInfo>();
 		private readonly MethodInfo _sendData;
-		private readonly FieldInfo _textureAssetsItem;
 		private readonly object _itemIconSync = new object();
 		private readonly Dictionary<int, Bitmap> _itemIconCache = new Dictionary<int, Bitmap>();
 		private readonly Dictionary<int, DateTime> _itemIconRetryAfter = new Dictionary<int, DateTime>();
 		private readonly Queue<int> _pendingItemIcons = new Queue<int>();
 		private readonly HashSet<int> _pendingItemIconSet = new HashSet<int>();
+		private readonly HashSet<int> _loggedItemIconFailures =
+			new HashSet<int>();
+		private int _itemIconGeneration;
+		private int _itemIconFailureCount;
+		private int _itemIconWorkerRunning;
+		private volatile bool _itemIconWorkerStopping;
+		private volatile string _lastItemIconError = string.Empty;
 		private EventInfo _gameTickEvent;
 		private Action _gameTickHandler;
 		private volatile CheatState _cheatState = new CheatState();
@@ -203,16 +211,37 @@ namespace Terraria1456Toolkit
 		{
 			get { return _lastGameThreadError; }
 		}
+		public int ItemIconGeneration
+		{
+			get { return Volatile.Read(ref _itemIconGeneration); }
+		}
+		public int ItemIconFailureCount
+		{
+			get { return Volatile.Read(ref _itemIconFailureCount); }
+		}
+		public string LastItemIconError
+		{
+			get { return _lastItemIconError; }
+		}
 
 		private VanillaGameApi(Assembly assembly)
 		{
 			_terrariaAssembly = assembly;
 			Version = assembly.GetName().Version == null ? "未知" : assembly.GetName().Version.ToString();
+			string assemblyLocation = assembly.Location;
+			string assemblyDirectory = string.IsNullOrEmpty(assemblyLocation)
+				? null
+				: Path.GetDirectoryName(assemblyLocation);
+			_terrariaDirectory = string.IsNullOrEmpty(assemblyDirectory)
+				? AppDomain.CurrentDomain.BaseDirectory
+				: assemblyDirectory;
 
 			Type main = RequireType("Terraria.Main");
 			Type player = RequireType("Terraria.Player");
 			Type item = RequireType("Terraria.Item");
 
+			_mainInstance = RequireField(main, "instance", true);
+			_gameMenu = RequireField(main, "gameMenu", true);
 			_players = RequireField(main, "player", true);
 			_myPlayer = RequireField(main, "myPlayer", true);
 			_netMode = RequireField(main, "netMode", true);
@@ -284,7 +313,19 @@ namespace Terraria1456Toolkit
 			_setDefaults = item.GetMethods(BindingFlags.Public | BindingFlags.Instance)
 				.First(method => method.Name == "SetDefaults" && method.GetParameters().Length >= 1 &&
 					method.GetParameters()[0].ParameterType == typeof(int));
-			_turnToAir = RequireMethod(item, "TurnToAir", 0);
+			// Terraria 1.4.5.6 changed TurnToAir() to
+			// TurnToAir(bool fullReset = false).  Accept both forms so the
+			// original backend keeps working across the 1.4.4/1.4.5 boundary.
+			_turnToAir = item.GetMethods(
+					BindingFlags.Public | BindingFlags.NonPublic |
+					BindingFlags.Instance)
+				.Where(method => method.Name == "TurnToAir")
+				.OrderBy(method => method.GetParameters().Length)
+				.FirstOrDefault(method => method.GetParameters().All(
+					parameter => parameter.IsOptional ||
+						parameter.HasDefaultValue));
+			if (_turnToAir == null)
+				throw new MissingMethodException(item.FullName, "TurnToAir");
 			Type itemId = RequireType("Terraria.ID.ItemID");
 			FieldInfo itemCount = itemId.GetField(
 				"Count",
@@ -332,15 +373,6 @@ namespace Terraria1456Toolkit
 				.Where(method => method.Name == "SendData")
 				.OrderByDescending(method => method.GetParameters().Length)
 				.First();
-
-			// 图标不是修改功能的必要依赖。字段找不到或纹理暂不可读时，
-			// 背包控件会自动回退到显示物品 ID，不影响其他功能。
-			Type textureAssets = _terrariaAssembly.GetType("Terraria.GameContent.TextureAssets", false);
-			if (textureAssets != null) {
-				_textureAssetsItem = textureAssets.GetField(
-					"Item",
-					BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-			}
 
 			TryInitializeCreativeGodPower();
 		}
@@ -687,13 +719,15 @@ namespace Terraria1456Toolkit
 				bool afterPlayerUpdate = ObserveGameUpdateCountChanged();
 				ProcessPendingGameActions(24);
 				object localPlayer = GetLocalPlayer();
-				_gameWorldReady = IsPlayerActive(localPlayer);
+				// OnTickForThirdPartySoftwareOnly is called once near the start
+				// and once at the end of Main.DoUpdate.  During world transitions
+				// Player.active can briefly lag behind gameMenu, so accept either
+				// signal while still requiring a real local-player object.
+				_gameWorldReady = localPlayer != null &&
+					(IsPlayerActive(localPlayer) ||
+					 !Convert.ToBoolean(_gameMenu.GetValue(null)));
 				if (afterPlayerUpdate && _gameWorldReady)
 					ProcessMapRevealOnGameThread();
-
-				// Texture2D.GetData has graphics-device thread affinity.  Drain at
-				// most one UI request per Terraria tick, on Terraria's own thread.
-				ProcessPendingItemIcons(1);
 
 				CheatState state = _cheatState;
 				UpdateFullBrightOnGameThread(state.FullBright);
@@ -1186,6 +1220,11 @@ namespace Terraria1456Toolkit
 			RestoreViewZoomState();
 			lock (_gameActionSync)
 				_pendingGameActions.Clear();
+			lock (_itemIconSync) {
+				_itemIconWorkerStopping = true;
+				_pendingItemIcons.Clear();
+				_pendingItemIconSet.Clear();
+			}
 			if (!_gameTickHooked || _gameTickEvent == null || _gameTickHandler == null)
 				return;
 
@@ -1283,13 +1322,15 @@ namespace Terraria1456Toolkit
 
 		public Bitmap GetItemIcon(int type)
 		{
-			if (type <= 0 || _textureAssetsItem == null)
+			if (type <= 0 || type >= _itemTypeCount)
 				return null;
 
 			lock (_itemIconSync) {
 				Bitmap cached;
 				if (_itemIconCache.TryGetValue(type, out cached))
 					return cached;
+				if (_itemIconWorkerStopping)
+					return null;
 
 				DateTime retryAfter;
 				if (_itemIconRetryAfter.TryGetValue(type, out retryAfter) &&
@@ -1297,85 +1338,151 @@ namespace Terraria1456Toolkit
 					return null;
 				_itemIconRetryAfter.Remove(type);
 
-				if (_pendingItemIconSet.Add(type))
+				if (_pendingItemIconSet.Add(type)) {
 					_pendingItemIcons.Enqueue(type);
+				}
 			}
-			// Painting never touches a Texture2D.  The game-thread callback will
-			// populate the cache and a later inventory refresh will repaint it.
+			EnsureItemIconWorker();
+			// Painting only reads completed Bitmaps. The serial CPU worker
+			// decodes XNB files without touching Terraria's GraphicsDevice.
 			return null;
 		}
 
-		private void ProcessPendingItemIcons(int maximumCount)
+		private void EnsureItemIconWorker()
 		{
-			for (int processed = 0; processed < maximumCount; processed++) {
-				int type;
-				lock (_itemIconSync) {
-					if (_pendingItemIcons.Count == 0)
-						return;
-					type = _pendingItemIcons.Dequeue();
-					_pendingItemIconSet.Remove(type);
-					if (_itemIconCache.ContainsKey(type))
-						continue;
+			if (Interlocked.CompareExchange(
+					ref _itemIconWorkerRunning, 1, 0) != 0)
+				return;
+			bool queued = false;
+			try {
+				queued = ThreadPool.QueueUserWorkItem(delegate {
+					ProcessItemIconQueue();
+				});
+			}
+			catch {
+			}
+			if (!queued)
+				Interlocked.Exchange(ref _itemIconWorkerRunning, 0);
+		}
 
-					DateTime retryAfter;
-					if (_itemIconRetryAfter.TryGetValue(type, out retryAfter) &&
-						retryAfter > DateTime.UtcNow)
-						continue;
-					_itemIconRetryAfter.Remove(type);
-				}
-
-				Bitmap bitmap = null;
-				try {
-					bitmap = LoadItemIconOnGameThread(type);
-				}
-				catch {
-					// Loading can fail while Terraria is starting, recreating its
-					// graphics device, or disposing content.  Never let that
-					// exception escape into Terraria's update loop.
-				}
-
-				if (bitmap == null) {
-					lock (_itemIconSync)
-						_itemIconRetryAfter[type] = DateTime.UtcNow.AddSeconds(5);
-					continue;
-				}
-
-				bool keepBitmap = false;
-				lock (_itemIconSync) {
-					if (!_itemIconCache.ContainsKey(type)) {
-						_itemIconCache[type] = bitmap;
-						_itemIconRetryAfter.Remove(type);
-						keepBitmap = true;
+		private void ProcessItemIconQueue()
+		{
+			int currentType = 0;
+			try {
+				while (true) {
+					int type;
+					lock (_itemIconSync) {
+						if (_itemIconWorkerStopping ||
+							_pendingItemIcons.Count == 0)
+							return;
+						type = _pendingItemIcons.Dequeue();
+						currentType = type;
 					}
-				}
-				if (!keepBitmap) {
+
+					Bitmap bitmap = null;
+					Exception failure = null;
 					try {
-						bitmap.Dispose();
+						bitmap = VanillaXnbTextureDecoder.DecodeItemTexture(
+							_terrariaDirectory, type);
 					}
-					catch {
+					catch (Exception ex) {
+						failure = ex;
+					}
+
+					bool keepBitmap = false;
+					bool recordFailure = false;
+					lock (_itemIconSync) {
+						_pendingItemIconSet.Remove(type);
+						if (_itemIconWorkerStopping) {
+							// The form has closed while this file was decoding.
+						}
+						else if (bitmap != null &&
+							!_itemIconCache.ContainsKey(type)) {
+							_itemIconCache[type] = bitmap;
+							_itemIconRetryAfter.Remove(type);
+							Interlocked.Increment(ref _itemIconGeneration);
+							_lastItemIconError = string.Empty;
+							keepBitmap = true;
+						}
+						else if (bitmap == null) {
+							_itemIconRetryAfter[type] =
+								DateTime.UtcNow.AddSeconds(30);
+							recordFailure = true;
+						}
+					}
+
+					if (!keepBitmap && bitmap != null) {
+						try {
+							bitmap.Dispose();
+						}
+						catch {
+						}
+					}
+					if (recordFailure)
+						RecordItemIconFailure(type, failure);
+					currentType = 0;
+				}
+			}
+			catch (Exception ex) {
+				if (currentType > 0) {
+					lock (_itemIconSync) {
+						_pendingItemIconSet.Remove(currentType);
+						if (!_itemIconWorkerStopping) {
+							_itemIconRetryAfter[currentType] =
+								DateTime.UtcNow.AddSeconds(30);
+						}
 					}
 				}
+				_lastItemIconError =
+					"图标后台线程：" + DescribeException(ex);
+				Interlocked.Increment(ref _itemIconFailureCount);
+			}
+			finally {
+				Interlocked.Exchange(ref _itemIconWorkerRunning, 0);
+				bool restart;
+				lock (_itemIconSync) {
+					restart = !_itemIconWorkerStopping &&
+						_pendingItemIcons.Count > 0;
+				}
+				if (restart)
+					EnsureItemIconWorker();
 			}
 		}
 
-		private Bitmap LoadItemIconOnGameThread(int type)
+		private void RecordItemIconFailure(
+			int type,
+			Exception exception)
 		{
-			Array assets = _textureAssetsItem.GetValue(null) as Array;
-			if (assets == null || type < 0 || type >= assets.Length)
-				return null;
+			string error = exception == null
+				? "贴图读取返回空。"
+				: DescribeException(exception);
+			_lastItemIconError = "ID " + type + "：" + error;
+			Interlocked.Increment(ref _itemIconFailureCount);
 
-			object asset = assets.GetValue(type);
-			if (asset == null)
-				return null;
+			bool shouldLog;
+			lock (_itemIconSync)
+				shouldLog = _loggedItemIconFailures.Add(type);
+			if (!shouldLog)
+				return;
 
-			PropertyInfo valueProperty = asset.GetType().GetProperty(
-				"Value",
-				BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-			if (valueProperty == null)
-				return null;
-
-			object texture = valueProperty.GetValue(asset, null);
-			return CopyTextureToBitmap(texture);
+			try {
+				string directory = Path.Combine(
+					Path.GetTempPath(), "HoamTerrariaToolkit");
+				Directory.CreateDirectory(directory);
+				string path = Path.Combine(
+					directory, "vanilla_item_icons.log");
+				File.AppendAllText(
+					path,
+					DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") +
+					" [ID " + type + "] " +
+					(exception == null
+						? error
+						: exception.ToString()) +
+					Environment.NewLine,
+					new System.Text.UTF8Encoding(true));
+			}
+			catch {
+			}
 		}
 
 		public void GiveItem(int type, int stack)
@@ -1414,7 +1521,7 @@ namespace Terraria1456Toolkit
 					throw new InvalidOperationException("本地玩家尚未进入世界。");
 				Array inventory = (Array)_inventory.GetValue(player);
 				object item = inventory.GetValue(slot);
-				_turnToAir.Invoke(item, null);
+				InvokeWithOptionalDefaults(_turnToAir, item);
 				SyncSlot(player, slot, item);
 			});
 		}
@@ -1504,7 +1611,7 @@ namespace Terraria1456Toolkit
 							"type",
 							"物品 ID 必须在 0 到 " + MaxItemType + " 之间。");
 					if (nextType == 0) {
-						_turnToAir.Invoke(item, null);
+						InvokeWithOptionalDefaults(_turnToAir, item);
 						SyncSlot(player, slot, item);
 						return;
 					}
@@ -1615,120 +1722,17 @@ namespace Terraria1456Toolkit
 			method.Invoke(target, args);
 		}
 
-		private static Bitmap CopyTextureToBitmap(object texture)
+		private void InvokeWithOptionalDefaults(
+			MethodInfo method, object target)
 		{
-			if (texture == null)
-				return null;
-
-			Type textureType = texture.GetType();
-			PropertyInfo widthProperty = textureType.GetProperty("Width", BindingFlags.Public | BindingFlags.Instance);
-			PropertyInfo heightProperty = textureType.GetProperty("Height", BindingFlags.Public | BindingFlags.Instance);
-			if (widthProperty == null || heightProperty == null)
-				return null;
-
-			int width = Convert.ToInt32(widthProperty.GetValue(texture, null));
-			int height = Convert.ToInt32(heightProperty.GetValue(texture, null));
-			if (width <= 0 || height <= 0 || width > 4096 || height > 4096)
-				return null;
-
-			Type colorType = textureType.Assembly.GetType("Microsoft.Xna.Framework.Color", false);
-			if (colorType == null) {
-				colorType = AppDomain.CurrentDomain.GetAssemblies()
-					.Select(assembly => assembly.GetType("Microsoft.Xna.Framework.Color", false))
-					.FirstOrDefault(candidate => candidate != null);
+			ParameterInfo[] parameters = method.GetParameters();
+			object[] args = new object[parameters.Length];
+			for (int i = 0; i < args.Length; i++) {
+				args[i] = parameters[i].HasDefaultValue
+					? parameters[i].DefaultValue
+					: DefaultValue(parameters[i].ParameterType);
 			}
-			if (colorType == null)
-				return null;
-
-			MethodInfo getData = textureType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-				.FirstOrDefault(method => {
-					if (method.Name != "GetData" || !method.IsGenericMethodDefinition)
-						return false;
-					ParameterInfo[] parameters = method.GetParameters();
-					return parameters.Length == 1 && parameters[0].ParameterType.IsArray;
-				});
-			if (getData == null)
-				return null;
-
-			Array colors = Array.CreateInstance(colorType, width * height);
-			getData.MakeGenericMethod(colorType).Invoke(texture, new object[] { colors });
-
-			PropertyInfo packedValueProperty = colorType.GetProperty(
-				"PackedValue",
-				BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-			PropertyInfo redProperty = colorType.GetProperty("R", BindingFlags.Public | BindingFlags.Instance);
-			PropertyInfo greenProperty = colorType.GetProperty("G", BindingFlags.Public | BindingFlags.Instance);
-			PropertyInfo blueProperty = colorType.GetProperty("B", BindingFlags.Public | BindingFlags.Instance);
-			PropertyInfo alphaProperty = colorType.GetProperty("A", BindingFlags.Public | BindingFlags.Instance);
-			FieldInfo packedValueField = colorType.GetField(
-				"packedValue",
-				BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-
-			if (packedValueProperty == null && packedValueField == null &&
-				(redProperty == null || greenProperty == null ||
-				 blueProperty == null || alphaProperty == null))
-				return null;
-
-			Bitmap bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-			try {
-				BitmapData data = null;
-				try {
-					data = bitmap.LockBits(
-						new Rectangle(0, 0, width, height),
-						ImageLockMode.WriteOnly,
-						PixelFormat.Format32bppArgb);
-					byte[] pixels = new byte[Math.Abs(data.Stride) * height];
-					for (int y = 0; y < height; y++) {
-						int destination = y * Math.Abs(data.Stride);
-						for (int x = 0; x < width; x++) {
-							object color = colors.GetValue(y * width + x);
-							byte red;
-							byte green;
-							byte blue;
-							byte alpha;
-
-							object packedObject = packedValueProperty != null
-								? packedValueProperty.GetValue(color, null)
-								: packedValueField != null ? packedValueField.GetValue(color) : null;
-							if (packedObject != null) {
-								uint packed = Convert.ToUInt32(packedObject);
-								red = (byte)(packed & 0xFF);
-								green = (byte)((packed >> 8) & 0xFF);
-								blue = (byte)((packed >> 16) & 0xFF);
-								alpha = (byte)((packed >> 24) & 0xFF);
-							}
-							else {
-								red = Convert.ToByte(redProperty.GetValue(color, null));
-								green = Convert.ToByte(greenProperty.GetValue(color, null));
-								blue = Convert.ToByte(blueProperty.GetValue(color, null));
-								alpha = Convert.ToByte(alphaProperty.GetValue(color, null));
-							}
-
-							int offset = destination + x * 4;
-							pixels[offset] = blue;
-							pixels[offset + 1] = green;
-							pixels[offset + 2] = red;
-							pixels[offset + 3] = alpha;
-						}
-					}
-					for (int y = 0; y < height; y++) {
-						Marshal.Copy(
-							pixels,
-							y * Math.Abs(data.Stride),
-							IntPtr.Add(data.Scan0, y * data.Stride),
-							Math.Abs(data.Stride));
-					}
-				}
-				finally {
-					if (data != null)
-						bitmap.UnlockBits(data);
-				}
-			}
-			catch {
-				bitmap.Dispose();
-				throw;
-			}
-			return bitmap;
+			method.Invoke(target, args);
 		}
 
 		private object DefaultValue(Type type)

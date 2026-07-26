@@ -2,7 +2,7 @@
 
 Root: `C:\Users\hoamwtvoment\Pictures\ctf-sandbox-orchestrator\TmlToolkit`
 
-Total: **28**
+Total: **29**
 
 - `BUILD_COMBINED.ps1`
 - `CombinedToolkit/CombinedLauncher.cs`
@@ -18,6 +18,7 @@ Total: **28**
 - `Vanilla1456Toolkit/Launcher.cs`
 - `Vanilla1456Toolkit/TrainerForm.cs`
 - `Vanilla1456Toolkit/VanillaGameApi.cs`
+- `Vanilla1456Toolkit/VanillaXnbTextureDecoder.cs`
 - `Vanilla1456Toolkit/test/Host.cs`
 - `Vanilla1456Toolkit/test/Payload.cs`
 - `Vanilla1456Toolkit/test/ReflectionHarness.cs`
