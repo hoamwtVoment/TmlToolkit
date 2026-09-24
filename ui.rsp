@@ -1,7 +1,7 @@
 /nologo
 /nostdlib+
 /langversion:latest
-/nullable:enable
+/nullable:disable
 /target:library
 /optimize+
 /reference:"D:\steam\steamapps\common\tModLoader\dotnet\shared\Microsoft.NETCore.App\8.0.0\Microsoft.CSharp.dll"
