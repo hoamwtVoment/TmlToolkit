@@ -110,6 +110,7 @@ namespace TerrariaTmlToolkit
 		public int MaxBuffs = 100;
 		public int StepBlocks = 3;
 		public float MinimumViewZoom = TmlViewZoom.DefaultMinimumZoom;
+		public bool DrawToScreenZoom;
 	}
 
 	internal sealed class PrefixEntry { public int Id; public string Text; public override string ToString() { return Text ?? string.Empty; } }
@@ -314,6 +315,10 @@ namespace TerrariaTmlToolkit
 		private Hook _viewInputHook;
 		private ILHook _viewInitTargetsHook;
 		private Hook _viewOverdrawHook;
+		private ILHook _viewDrawToScreenHook;
+		private bool _viewDrawToScreenHookUnavailable;
+		// Read from the DoDraw IL delegate on the game thread every frame.
+		private volatile bool _drawToScreenZoomActive;
 		private bool _viewTransformHookUnavailable;
 		private bool _viewRenderExpansionUnavailable;
 		private bool _trainerViewZoomApplied;
@@ -373,6 +378,7 @@ namespace TerrariaTmlToolkit
 		private CheckBox _adjustableMaxBuffs;
 		private CheckBox _fullBright;
 		private CheckBox _unrestrictedView;
+		private CheckBox _drawToScreenZoom;
 		private CheckBox _unrestrictedWorldBounds;
 		private CheckBox _improveGameUnlimitedSelection;
 		private CheckBox _unlimitedPlacementInteractionRange;
@@ -572,6 +578,12 @@ namespace TerrariaTmlToolkit
 				(decimal)TmlViewZoom.DefaultMinimumZoom,
 				(decimal)TmlViewZoom.AbsoluteMinimumZoom, 1M, 0.05M,
 				"x", delegate { UpdateCheatSnapshot(); });
+			// Draws tiles straight to the screen at window resolution instead of
+			// into view-sized render targets. Lower quality, but the fill stops
+			// growing with the zoomed-out area. Untested combo; opt-in.
+			_drawToScreenZoom = AddOption(
+				world,
+				"极致缩放性能（直接绘制到屏幕，画质降低；缩远掉帧时再开）");
 			_unrestrictedWorldBounds = AddOption(world, "忽略世界边界（解除玩家和摄像边界）");
 			_improveGameUnlimitedSelection = AddOption(
 				world,
@@ -1647,7 +1659,9 @@ namespace TerrariaTmlToolkit
 						: Decimal.ToInt32(_stepBlocks.Value),
 					MinimumViewZoom = _farthestViewZoom == null
 						? TmlViewZoom.DefaultMinimumZoom
-						: Decimal.ToSingle(_farthestViewZoom.Value)
+						: Decimal.ToSingle(_farthestViewZoom.Value),
+					DrawToScreenZoom = _drawToScreenZoom != null &&
+						_drawToScreenZoom.Checked
 				};
 			}
 			catch {
@@ -3471,8 +3485,10 @@ namespace TerrariaTmlToolkit
 				_lastViewZoomUpdateCount = uint.MaxValue;
 				_trainerViewZoomApplied = true;
 				Main.GameZoomTarget = _unrestrictedGameZoomTarget;
-				_viewRenderTargetTier = GetViewRenderTargetTier(
-					_unrestrictedGameZoomTarget);
+				_drawToScreenZoomActive = snapshot.DrawToScreenZoom &&
+					_unrestrictedGameZoomTarget < 0.999F &&
+					EnsureDrawToScreenHookOnGameThread();
+				_viewRenderTargetTier = EffectiveTargetTier();
 				_viewTargetsNeedRebuild =
 					_viewInitTargetsHook != null &&
 					!_viewRenderExpansionUnavailable &&
@@ -3480,6 +3496,7 @@ namespace TerrariaTmlToolkit
 				_viewTargetRebuildDelay = 0;
 			}
 			if (Main.gameMenu) {
+				_drawToScreenZoomActive = false;
 				if (_viewInitTargetsHook != null &&
 					!_viewRenderExpansionUnavailable &&
 					_viewRenderTargetTier < 0.999F)
@@ -3497,9 +3514,13 @@ namespace TerrariaTmlToolkit
 			_unrestrictedGameZoomTarget = Math.Max(
 				_minimumViewZoom, _unrestrictedGameZoomTarget);
 			Main.GameZoomTarget = _unrestrictedGameZoomTarget;
+			// When drawing straight to the screen the targets stay vanilla-sized,
+			// so force tier 1 (no expansion) and let the direct path cover the view.
+			_drawToScreenZoomActive = snapshot.DrawToScreenZoom &&
+				_unrestrictedGameZoomTarget < 0.999F &&
+				EnsureDrawToScreenHookOnGameThread();
 
-			float targetTier = GetViewRenderTargetTier(
-				_unrestrictedGameZoomTarget);
+			float targetTier = EffectiveTargetTier();
 			if (Math.Abs(targetTier - _viewRenderTargetTier) > 0.001F) {
 				bool needsLargerTarget = targetTier < _viewRenderTargetTier;
 				_viewRenderTargetTier = targetTier;
@@ -3625,6 +3646,76 @@ namespace TerrariaTmlToolkit
 				_lastGameThreadError =
 					"扩展视野绘制 Hook：" + DescribeException(ex);
 			}
+
+		}
+
+		// Installed lazily the first time the极致缩放 option is used, so users
+		// who never opt in keep an unpatched DoDraw.  Returns true once the hook
+		// is in place.
+		private bool EnsureDrawToScreenHookOnGameThread()
+		{
+			if (_viewDrawToScreenHook != null)
+				return true;
+			if (_viewDrawToScreenHookUnavailable)
+				return false;
+			try {
+				MethodInfo doDraw = typeof(Main).GetMethods(
+						BindingFlags.Instance | BindingFlags.Public |
+						BindingFlags.NonPublic)
+					.FirstOrDefault(delegate(MethodInfo method) {
+						return method.Name == "DoDraw" &&
+							method.GetParameters().Length == 1;
+					});
+				if (doDraw == null)
+					throw new MissingMethodException(
+						typeof(Main).FullName, "DoDraw");
+				_viewDrawToScreenHook = new ILHook(
+					doDraw,
+					new ILContext.Manipulator(PatchDoDrawToScreen));
+				return true;
+			}
+			catch (Exception ex) {
+				DisposeILHookSilently(_viewDrawToScreenHook);
+				_viewDrawToScreenHook = null;
+				_viewDrawToScreenHookUnavailable = true;
+				_lastGameThreadError =
+					"极致缩放 Hook：" + DescribeException(ex);
+				return false;
+			}
+		}
+
+		// Vanilla ties Main.drawToScreen to retro lighting.  This appends, right
+		// after that per-frame assignment, a forced enable while the极致缩放
+		// option is on and the view is zoomed out, so tiles draw straight to the
+		// screen at window resolution instead of into view-sized targets.
+		private void PatchDoDrawToScreen(ILContext il)
+		{
+			ILCursor cursor = new ILCursor(il);
+			cursor.GotoNext(
+				MoveType.After,
+				instruction => instruction.MatchStsfld<Main>("drawToScreen"));
+			cursor.GotoNext(
+				MoveType.After,
+				instruction => instruction.MatchStsfld<Main>("drawToScreen"));
+			// Retarget the if/else merge so both lighting branches run the
+			// delegate, regardless of which store the compiler emitted last.
+			cursor.MoveAfterLabels();
+			cursor.EmitDelegate<Action>(ForceDrawToScreenZoom);
+		}
+
+		private void ForceDrawToScreenZoom()
+		{
+			if (_drawToScreenZoomActive)
+				Main.drawToScreen = true;
+		}
+
+		private float EffectiveTargetTier()
+		{
+			// The direct-to-screen path keeps vanilla-sized targets, so it never
+			// asks for an expansion tier.
+			return _drawToScreenZoomActive
+				? 1F
+				: GetViewRenderTargetTier(_unrestrictedGameZoomTarget);
 		}
 
 		private void MainUpdateViewZoomKeysHook(
@@ -3716,6 +3807,7 @@ namespace TerrariaTmlToolkit
 			GetScreenOverdrawOffsetOrig orig)
 		{
 			return IsUnrestrictedViewActive() &&
+				!_drawToScreenZoomActive &&
 				!_viewRenderExpansionUnavailable &&
 				_unrestrictedGameZoomTarget < 0.999F
 				? new XnaPoint(0, 0)
@@ -3898,10 +3990,14 @@ namespace TerrariaTmlToolkit
 			Hook inputHook = _viewInputHook;
 			ILHook initTargetsHook = _viewInitTargetsHook;
 			Hook overdrawHook = _viewOverdrawHook;
+			ILHook drawToScreenHook = _viewDrawToScreenHook;
 			_viewTransformHook = null;
 			_viewInputHook = null;
 			_viewInitTargetsHook = null;
 			_viewOverdrawHook = null;
+			_viewDrawToScreenHook = null;
+			_drawToScreenZoomActive = false;
+			DisposeILHookSilently(drawToScreenHook);
 			DisposeHookSilently(overdrawHook);
 			DisposeILHookSilently(initTargetsHook);
 			DisposeHookSilently(inputHook);
@@ -3926,6 +4022,7 @@ namespace TerrariaTmlToolkit
 
 		private void RestoreViewZoomStateOnGameThread()
 		{
+			_drawToScreenZoomActive = false;
 			if (_trainerViewZoomApplied) {
 				try {
 					Main.GameZoomTarget = _gameZoomTargetBeforeTrainer;

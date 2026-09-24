@@ -226,6 +226,7 @@ internal static class CombinedLauncher
 			});
 			AddPreviewValue(world, "最远缩放倍率", "0.50 ×");
 			AddPreviewOptions(world, new[] {
+				"极致缩放性能（直接绘制到屏幕，画质降低）",
 				"忽略世界边界（玩家与摄像机）",
 				"解除 ImproveGame 选择范围限制",
 				"无限放置、挖掘、交互距离"
