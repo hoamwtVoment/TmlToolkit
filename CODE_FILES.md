@@ -2,7 +2,7 @@
 
 Root: `C:\Users\hoamwtvoment\Pictures\ctf-sandbox-orchestrator\TmlToolkit`
 
-Total: **29**
+Total: **25**
 
 - `BUILD_COMBINED.ps1`
 - `CombinedToolkit/CombinedLauncher.cs`
@@ -23,10 +23,6 @@ Total: **29**
 - `Vanilla1456Toolkit/test/Payload.cs`
 - `Vanilla1456Toolkit/test/ReflectionHarness.cs`
 - `bootstrap.rsp`
-- `legacy/hoam_fix/build_fixed.py`
-- `legacy/hoam_fix/patch_unlock.py`
-- `legacy/hoam_fix/unlock.lua`
-- `legacy/hoam_fix_extract.py`
 - `test/Host.cs`
 - `test/Payload.cs`
 - `test/Player.decompiled.cs`
