@@ -2,7 +2,7 @@
 
 Root: `C:\Users\hoamwtvoment\Pictures\ctf-sandbox-orchestrator\TmlToolkit`
 
-Total: **25**
+Total: **27**
 
 - `BUILD_COMBINED.ps1`
 - `CombinedToolkit/CombinedLauncher.cs`
@@ -10,6 +10,7 @@ Total: **25**
 - `TmlBootstrap.cpp`
 - `TmlInjector.cs`
 - `TmlInventorySlotGrid.cs`
+- `TmlViewZoom.cs`
 - `TmlTrainerForm.cs`
 - `UiEntry.cs`
 - `Vanilla1456Toolkit/Bootstrap.cpp`
@@ -26,6 +27,7 @@ Total: **25**
 - `test/Host.cs`
 - `test/Payload.cs`
 - `test/Player.decompiled.cs`
+- `test/TmlViewZoomTest.cs`
 - `test/host.rsp`
 - `test/payload.rsp`
 - `ui.rsp`

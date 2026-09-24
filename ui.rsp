@@ -234,3 +234,4 @@
 UiEntry.cs
 TmlTrainerForm.cs
 TmlInventorySlotGrid.cs
+TmlViewZoom.cs

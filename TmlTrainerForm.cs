@@ -109,6 +109,7 @@ namespace TerrariaTmlToolkit
 		public int MaxMinions = 10;
 		public int MaxBuffs = 100;
 		public int StepBlocks = 3;
+		public float MinimumViewZoom = TmlViewZoom.DefaultMinimumZoom;
 	}
 
 	internal sealed class PrefixEntry { public int Id; public string Text; public override string ToString() { return Text ?? string.Empty; } }
@@ -194,10 +195,8 @@ namespace TerrariaTmlToolkit
 		private delegate void ClampScreenPositionOrig();
 		private delegate void ClampScreenPositionDetour(ClampScreenPositionOrig orig);
 
-		private const float MinimumUnrestrictedZoom = 0.30F;
 		private const float MaximumUnrestrictedZoom = 10F;
 		private const int VanillaRenderTargetPadding = 192;
-		private const int MaximumExpandedRenderTargetDimension = 8192;
 
 		private static readonly string[] ItemIntegerFields = {
 			"type", "stack", "damage", "useTime", "useAnimation",
@@ -320,6 +319,7 @@ namespace TerrariaTmlToolkit
 		private bool _trainerViewZoomApplied;
 		private float _gameZoomTargetBeforeTrainer;
 		private float _unrestrictedGameZoomTarget;
+		private float _minimumViewZoom = TmlViewZoom.DefaultMinimumZoom;
 		private uint _lastViewZoomUpdateCount = uint.MaxValue;
 		private float _viewRenderTargetTier = 1F;
 		private bool _viewTargetsNeedRebuild;
@@ -386,6 +386,7 @@ namespace TerrariaTmlToolkit
 		private NumericUpDown _maxMinions;
 		private NumericUpDown _maxBuffs;
 		private NumericUpDown _stepBlocks;
+		private NumericUpDown _farthestViewZoom;
 		private Button _mapRevealButton;
 		private Label _mapRevealStatusLabel;
 		private volatile bool _mapRevealRequested;
@@ -564,6 +565,13 @@ namespace TerrariaTmlToolkit
 			_unrestrictedView = AddOption(
 				world,
 				"解除放大/缩小按键限制（使用游戏原有 ZoomIn / ZoomOut 键）");
+			// Seeing more of the world costs proportionally more frame time;
+			// this caps how far the view can zoom out.
+			_farthestViewZoom = AddDecimalRow(
+				world, "最远缩放倍率",
+				(decimal)TmlViewZoom.DefaultMinimumZoom,
+				(decimal)TmlViewZoom.AbsoluteMinimumZoom, 1M, 0.05M,
+				"x", delegate { UpdateCheatSnapshot(); });
 			_unrestrictedWorldBounds = AddOption(world, "忽略世界边界（解除玩家和摄像边界）");
 			_improveGameUnlimitedSelection = AddOption(
 				world,
@@ -1636,7 +1644,10 @@ namespace TerrariaTmlToolkit
 						: Decimal.ToInt32(_maxBuffs.Value),
 					StepBlocks = _stepBlocks == null
 						? 3
-						: Decimal.ToInt32(_stepBlocks.Value)
+						: Decimal.ToInt32(_stepBlocks.Value),
+					MinimumViewZoom = _farthestViewZoom == null
+						? TmlViewZoom.DefaultMinimumZoom
+						: Decimal.ToSingle(_farthestViewZoom.Value)
 				};
 			}
 			catch {
@@ -3450,12 +3461,13 @@ namespace TerrariaTmlToolkit
 			}
 			if (!_trainerViewZoomApplied) {
 				_gameZoomTargetBeforeTrainer = Main.GameZoomTarget;
-				_unrestrictedGameZoomTarget = Math.Max(
-					MinimumUnrestrictedZoom,
-					Math.Min(MaximumUnrestrictedZoom, Main.GameZoomTarget));
 				InstallViewHooksOnGameThread();
 				if (_viewTransformHook == null || _viewInputHook == null)
 					return;
+				UpdateMinimumViewZoom(snapshot);
+				_unrestrictedGameZoomTarget = Math.Max(
+					_minimumViewZoom,
+					Math.Min(MaximumUnrestrictedZoom, Main.GameZoomTarget));
 				_lastViewZoomUpdateCount = uint.MaxValue;
 				_trainerViewZoomApplied = true;
 				Main.GameZoomTarget = _unrestrictedGameZoomTarget;
@@ -3479,6 +3491,11 @@ namespace TerrariaTmlToolkit
 			if (_lastViewZoomUpdateCount == updateCount)
 				return;
 			_lastViewZoomUpdateCount = updateCount;
+			// The limit follows the setting and the screen size, and pulls the
+			// view back in if it is currently beyond it.
+			UpdateMinimumViewZoom(snapshot);
+			_unrestrictedGameZoomTarget = Math.Max(
+				_minimumViewZoom, _unrestrictedGameZoomTarget);
 			Main.GameZoomTarget = _unrestrictedGameZoomTarget;
 
 			float targetTier = GetViewRenderTargetTier(
@@ -3628,7 +3645,7 @@ namespace TerrariaTmlToolkit
 						? _unrestrictedGameZoomTarget * zoomStepRatio
 						: _unrestrictedGameZoomTarget / zoomStepRatio;
 					_unrestrictedGameZoomTarget = Math.Max(
-						MinimumUnrestrictedZoom,
+						_minimumViewZoom,
 						Math.Min(
 							MaximumUnrestrictedZoom,
 							_unrestrictedGameZoomTarget));
@@ -3670,7 +3687,7 @@ namespace TerrariaTmlToolkit
 					return;
 				}
 
-				int expandedPadding = ComputeExpandedRenderTargetPadding(
+				int expandedPadding = TmlViewZoom.ComputePadding(
 					width, height, _viewRenderTargetTier, vanillaPadding);
 				int requiredMaximum = Math.Max(
 					width + expandedPadding * 2,
@@ -3716,7 +3733,7 @@ namespace TerrariaTmlToolkit
 					_trainerViewZoomApplied)
 					transform.Zoom = new XnaVector2(
 						Math.Max(
-							MinimumUnrestrictedZoom,
+							_minimumViewZoom,
 							_unrestrictedGameZoomTarget));
 			}
 			catch {
@@ -3730,34 +3747,24 @@ namespace TerrariaTmlToolkit
 				_trainerViewZoomApplied;
 		}
 
-		private static float GetViewRenderTargetTier(float zoom)
+		private void UpdateMinimumViewZoom(CheatSnapshot snapshot)
 		{
-			if (zoom >= 0.875F)
-				return 1F;
-			if (zoom >= 0.625F)
-				return 0.75F;
-			if (zoom >= 0.45F)
-				return 0.50F;
-			if (zoom >= 0.35F)
-				return 0.40F;
-			return MinimumUnrestrictedZoom;
+			_minimumViewZoom = TmlViewZoom.GetEffectiveMinimumZoom(
+				snapshot.MinimumViewZoom,
+				Main.screenWidth,
+				Main.screenHeight,
+				Math.Max(0, _viewVanillaRenderTargetPadding),
+				_viewInitTargetsHook != null && !_viewRenderExpansionUnavailable);
 		}
 
-		private static int ComputeExpandedRenderTargetPadding(
-			int width, int height, float zoomTier, int vanillaPadding)
+		private float GetViewRenderTargetTier(float zoom)
 		{
-			float boundedTier = Math.Max(
-				MinimumUnrestrictedZoom, Math.Min(1F, zoomTier));
-			double extraScale = 1.0 / boundedTier - 1.0;
-			int desiredExtra = (int)Math.Ceiling(
-				Math.Max(width, height) * extraScale * 0.5);
-			int maximumPadding = Math.Min(
-				(MaximumExpandedRenderTargetDimension - width) / 2,
-				(MaximumExpandedRenderTargetDimension - height) / 2);
-			maximumPadding = Math.Max(vanillaPadding, maximumPadding);
-			return Math.Max(
-				vanillaPadding,
-				Math.Min(vanillaPadding + desiredExtra, maximumPadding));
+			return TmlViewZoom.GetTargetTier(
+				zoom,
+				_minimumViewZoom,
+				Main.screenWidth,
+				Main.screenHeight,
+				Math.Max(0, _viewVanillaRenderTargetPadding));
 		}
 
 		private void ProcessViewTargetRebuildOnGameThread()
@@ -3793,6 +3800,10 @@ namespace TerrariaTmlToolkit
 				_viewTargetRebuildInProgress = true;
 				_viewResizeBusyField.SetValue(null, true);
 				_viewInitTargetsNoArgs.Invoke(Main.instance, null);
+				// New targets stay blank until each layer's turn in the game's
+				// four-frame render cycle; redraw them all next frame instead,
+				// as the game does after a large camera jump.
+				Main.renderNow = true;
 				_viewTargetsNeedRebuild =
 					!ViewRenderTargetsMatchCurrentTier();
 				if (_viewTargetsNeedRebuild) {
@@ -3842,6 +3853,7 @@ namespace TerrariaTmlToolkit
 				_viewTargetRebuildInProgress = true;
 				_viewResizeBusyField.SetValue(null, true);
 				_viewInitTargetsNoArgs.Invoke(Main.instance, null);
+				Main.renderNow = true;
 				_viewVanillaRecoveryPending = false;
 			}
 			catch {
@@ -3865,7 +3877,7 @@ namespace TerrariaTmlToolkit
 					return false;
 				if (_viewRenderTargetTier >= 0.999F)
 					return true;
-				int padding = ComputeExpandedRenderTargetPadding(
+				int padding = TmlViewZoom.ComputePadding(
 					Main.screenWidth,
 					Main.screenHeight,
 					_viewRenderTargetTier,

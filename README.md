@@ -36,7 +36,8 @@ Windows 平台的 Terraria 原版与 tModLoader 双兼容修改器。项目采�
 
 - Fullbright 场景全亮。
 - 分批点亮整个地图。
-- 解除游戏缩放按键限制，并扩展对应渲染目标。
+- 解除游戏缩放按键限制，并按实际视野扩展渲染目标（tModLoader）。
+- 可设置最远缩放倍率（默认 0.5）：越小视野越大，渲染和光照开销也按可见面积增加。
 - 忽略玩家软边界和摄像机世界边界。
 - 解除 ImproveGame 液体魔杖、建筑和油漆工具的选择范围限制。
 - 无限放置、挖掘和交互距离。
@@ -124,6 +125,7 @@ $root = (Get-Location).Path
 | `UiEntry.cs` | 游戏内 UI 线程入口 |
 | `TmlTrainerForm.cs` | tModLoader 修改器主界面与功能 Hook |
 | `TmlInventorySlotGrid.cs` | 背包槽位和物品图标控件 |
+| `TmlViewZoom.cs` | 扩展视野的渲染目标尺寸规则（离线测试：`test/TmlViewZoomTest.cs`） |
 | `Vanilla1456Toolkit/` | Terraria 1.4.5.6 原版后端 |
 | `Vanilla1456Toolkit/VanillaXnbTextureDecoder.cs` | 原版物品 XNB 的 CPU 解压与贴图转换 |
 | `Vanilla1456Toolkit/test/ReflectionHarness.cs` | 原版后端差分测试：用桩类型模拟 Terraria，输出可逐行对比的运行轨迹（构建方法见文件头） |

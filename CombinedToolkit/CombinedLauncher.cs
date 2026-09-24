@@ -222,7 +222,10 @@ internal static class CombinedLauncher
 
 			AddPreviewOptions(world, new[] {
 				"场景全亮（Fullbright）",
-				"解除放大/缩小按键限制",
+				"解除放大/缩小按键限制"
+			});
+			AddPreviewValue(world, "最远缩放倍率", "0.50 ×");
+			AddPreviewOptions(world, new[] {
 				"忽略世界边界（玩家与摄像机）",
 				"解除 ImproveGame 选择范围限制",
 				"无限放置、挖掘、交互距离"
