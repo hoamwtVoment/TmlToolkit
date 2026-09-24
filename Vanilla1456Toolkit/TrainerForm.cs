@@ -263,23 +263,14 @@ namespace Terraria1456Toolkit
 			_noFallDamage = AddOption(survival, "免疫摔落伤害");
 			_lavaImmune = AddOption(survival, "熔岩免疫");
 			_fastMovement = AddAdjustableOption(
-				movement,
-				"高速移动",
-				"移动倍率",
-				3.0M,
-				out _fastMovementMultiplier);
+				movement, "高速移动", "移动倍率",
+				3.0M, 0.25M, 2, "×", out _fastMovementMultiplier);
 			_highJump = AddAdjustableOption(
-				movement,
-				"高跳",
-				"跳跃高度倍率",
-				2.5M,
-				out _highJumpMultiplier);
-			_adjustableStep = AddStepOption(
-				movement,
-				"可调 Step（自动走上完整方块）",
-				"最大整格数",
-				3M,
-				out _stepBlocks);
+				movement, "高跳", "跳跃高度倍率",
+				2.5M, 0.25M, 2, "×", out _highJumpMultiplier);
+			_adjustableStep = AddAdjustableOption(
+				movement, "可调 Step（自动走上完整方块）", "最大整格数",
+				3M, 1M, 0, "格", out _stepBlocks);
 			_infiniteFlight = AddOption(movement, "无限翅膀/火箭时间");
 			_fullBright = AddOption(
 				world,
@@ -618,12 +609,7 @@ namespace Terraria1456Toolkit
 			int decimalPlaces,
 			decimal increment)
 		{
-			Label label = new Label();
-			label.Text = caption;
-			label.Dock = DockStyle.Fill;
-			label.TextAlign = ContentAlignment.MiddleRight;
-			label.Margin = new Padding(2, 5, 5, 4);
-			table.Controls.Add(label, column, row);
+			AddItemAttributeCaption(table, row, column, caption);
 
 			NumericUpDown editor = new NumericUpDown();
 			editor.Name = "itemAttribute_" + name;
@@ -645,12 +631,7 @@ namespace Terraria1456Toolkit
 			string name,
 			string caption)
 		{
-			Label label = new Label();
-			label.Text = caption;
-			label.Dock = DockStyle.Fill;
-			label.TextAlign = ContentAlignment.MiddleRight;
-			label.Margin = new Padding(2, 5, 5, 4);
-			table.Controls.Add(label, column, row);
+			AddItemAttributeCaption(table, row, column, caption);
 
 			CheckBox editor = new CheckBox();
 			editor.Name = "itemAttribute_" + name;
@@ -660,6 +641,20 @@ namespace Terraria1456Toolkit
 			editor.Margin = new Padding(0, 5, 8, 4);
 			table.Controls.Add(editor, column + 1, row);
 			_itemAttributeEditors[name] = editor;
+		}
+
+		private static void AddItemAttributeCaption(
+			TableLayoutPanel table,
+			int row,
+			int column,
+			string caption)
+		{
+			Label label = new Label();
+			label.Text = caption;
+			label.Dock = DockStyle.Fill;
+			label.TextAlign = ContentAlignment.MiddleRight;
+			label.Margin = new Padding(2, 5, 5, 4);
+			table.Controls.Add(label, column, row);
 		}
 
 		private TabPage BuildRemoteInventoryPage()
@@ -830,11 +825,8 @@ namespace Terraria1456Toolkit
 				ShowSelectedRemoteInventory();
 			}
 			catch (Exception ex) {
-				Exception root = ex;
-				while (root.InnerException != null)
-					root = root.InnerException;
 				_remoteInventoryInfo.Text = "别人背包刷新失败：" +
-					root.GetType().Name + " - " + root.Message;
+					DescribeRootException(ex);
 			}
 		}
 
@@ -1123,14 +1115,19 @@ namespace Terraria1456Toolkit
 				}
 			}
 			catch (Exception ex) {
-				Exception root = ex;
-				while (root.InnerException != null)
-					root = root.InnerException;
 				_statusLabel.Text =
 					"本帧游戏数据读取未完成：" +
-					root.GetType().Name + " - " + root.Message +
+					DescribeRootException(ex) +
 					"；将自动重试。";
 			}
+		}
+
+		private static string DescribeRootException(Exception exception)
+		{
+			Exception root = exception;
+			while (root.InnerException != null)
+				root = root.InnerException;
+			return root.GetType().Name + " - " + root.Message;
 		}
 
 		private void UpdateMapRevealUi()
@@ -1627,12 +1624,16 @@ namespace Terraria1456Toolkit
 			return option;
 		}
 
+		// A feature checkbox followed by "caption [1-10] unit" on one row.
 		private static CheckBox AddAdjustableOption(
 			Control parent,
 			string text,
-			string multiplierCaption,
+			string captionText,
 			decimal defaultValue,
-			out NumericUpDown multiplier)
+			decimal increment,
+			int decimalPlaces,
+			string unit,
+			out NumericUpDown value)
 		{
 			FlowLayoutPanel row = new FlowLayoutPanel();
 			row.AutoSize = true;
@@ -1646,70 +1647,25 @@ namespace Terraria1456Toolkit
 			row.Controls.Add(option);
 
 			Label caption = new Label();
-			caption.Text = multiplierCaption;
+			caption.Text = captionText;
 			caption.AutoSize = true;
 			caption.Margin = new Padding(0, 9, 5, 0);
 			row.Controls.Add(caption);
 
-			multiplier = new NumericUpDown();
-			multiplier.Minimum = 1.0M;
-			multiplier.Maximum = 10.0M;
-			multiplier.Increment = 0.25M;
-			multiplier.DecimalPlaces = 2;
-			multiplier.Value = Math.Max(
-				multiplier.Minimum,
-				Math.Min(multiplier.Maximum, defaultValue));
-			multiplier.Width = 82;
-			multiplier.Margin = new Padding(0, 5, 4, 0);
-			row.Controls.Add(multiplier);
+			value = new NumericUpDown();
+			value.Minimum = 1M;
+			value.Maximum = 10M;
+			value.Increment = increment;
+			value.DecimalPlaces = decimalPlaces;
+			value.Value = Math.Max(
+				value.Minimum,
+				Math.Min(value.Maximum, defaultValue));
+			value.Width = 82;
+			value.Margin = new Padding(0, 5, 4, 0);
+			row.Controls.Add(value);
 
 			Label suffix = new Label();
-			suffix.Text = "×";
-			suffix.AutoSize = true;
-			suffix.Margin = new Padding(0, 9, 0, 0);
-			row.Controls.Add(suffix);
-			parent.Controls.Add(row);
-			return option;
-		}
-
-		private static CheckBox AddStepOption(
-			Control parent,
-			string text,
-			string stepCaption,
-			decimal defaultValue,
-			out NumericUpDown blocks)
-		{
-			FlowLayoutPanel row = new FlowLayoutPanel();
-			row.AutoSize = true;
-			row.WrapContents = false;
-			row.Margin = new Padding(0, 2, 0, 2);
-
-			CheckBox option = new CheckBox();
-			option.Text = text;
-			option.AutoSize = true;
-			option.Margin = new Padding(3, 7, 14, 7);
-			row.Controls.Add(option);
-
-			Label caption = new Label();
-			caption.Text = stepCaption;
-			caption.AutoSize = true;
-			caption.Margin = new Padding(0, 9, 5, 0);
-			row.Controls.Add(caption);
-
-			blocks = new NumericUpDown();
-			blocks.Minimum = 1M;
-			blocks.Maximum = 10M;
-			blocks.Increment = 1M;
-			blocks.DecimalPlaces = 0;
-			blocks.Value = Math.Max(
-				blocks.Minimum,
-				Math.Min(blocks.Maximum, defaultValue));
-			blocks.Width = 82;
-			blocks.Margin = new Padding(0, 5, 4, 0);
-			row.Controls.Add(blocks);
-
-			Label suffix = new Label();
-			suffix.Text = "格";
+			suffix.Text = unit;
 			suffix.AutoSize = true;
 			suffix.Margin = new Padding(0, 9, 0, 0);
 			row.Controls.Add(suffix);

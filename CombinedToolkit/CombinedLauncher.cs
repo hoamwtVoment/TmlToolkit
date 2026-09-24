@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -6,7 +6,6 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
@@ -636,16 +635,10 @@ internal static class CombinedLauncher
 			BeginAutomaticInjection(target);
 		}
 
-		private void BeginAutomaticInjection(TargetChoice selected)
+		private void BeginAutomaticInjection(TargetChoice target)
 		{
-			if (selected == null || _injecting)
+			if (target == null || _injecting)
 				return;
-			TargetChoice target = new TargetChoice {
-				ProcessId = selected.ProcessId,
-				UseTml = selected.UseTml,
-				Score = selected.Score,
-				Title = selected.Title
-			};
 			_lastAttemptKey = target.Key;
 			_injecting = true;
 			_retryButton.Enabled = false;
@@ -909,71 +902,6 @@ internal static class CombinedLauncher
 			.ToArray();
 	}
 
-	private static Process FindVanilla()
-	{
-		return Process.GetProcessesByName("Terraria").FirstOrDefault(delegate(Process process) {
-			try { return !process.HasExited && process.MainModule != null; }
-			catch { return false; }
-		});
-	}
-
-	private static Process FindTml()
-	{
-		Process[] candidates = Process.GetProcesses()
-			.Where(delegate(Process process) {
-				try {
-					return string.Equals(process.ProcessName, "dotnet", StringComparison.OrdinalIgnoreCase) ||
-						process.ProcessName.IndexOf(
-							"tModLoader", StringComparison.OrdinalIgnoreCase) >= 0;
-				}
-				catch { return false; }
-			})
-			.Where(IsTmlProcess)
-			.ToArray();
-		if (candidates.Length == 0)
-			return null;
-
-		uint foregroundPid = 0;
-		try {
-			IntPtr foreground = GetForegroundWindow();
-			if (foreground != IntPtr.Zero)
-				GetWindowThreadProcessId(foreground, out foregroundPid);
-		}
-		catch { }
-
-		foreach (Process candidate in candidates) {
-			WriteStableLog(
-				"tml-candidate " + DescribeTmlCandidate(
-					candidate, foregroundPid));
-		}
-
-		Process[] clients = candidates
-			.Where(delegate(Process process) {
-				return !IsLikelyTmlServer(process);
-			})
-			.OrderByDescending(delegate(Process process) {
-				return ScoreTmlClient(process, foregroundPid);
-			})
-			.ThenByDescending(SafeStartTimeTicks)
-			.ToArray();
-		if (clients.Length == 0)
-			return null;
-
-		int bestScore = ScoreTmlClient(clients[0], foregroundPid);
-		if (clients.Length > 1 && bestScore > 0 &&
-			bestScore == ScoreTmlClient(clients[1], foregroundPid)) {
-			string choices = string.Join("\n", clients
-				.Take(6)
-				.Select(delegate(Process process) {
-					return "PID " + process.Id + "  " + SafeWindowTitle(process);
-				}));
-			throw new InvalidOperationException(
-				"检测到多个同等优先级的 tModLoader 客户端，已停止以避免注入错误进程。\n\n" +
-				choices + "\n\n请只保留要修改的那个游戏窗口后重试。");
-		}
-		return clients[0];
-	}
-
 	private static bool IsTmlProcess(Process process)
 	{
 		if (process == null)
@@ -1043,30 +971,10 @@ internal static class CombinedLauncher
 		return score;
 	}
 
-	private static long SafeStartTimeTicks(Process process)
-	{
-		try { return process.StartTime.Ticks; }
-		catch { return 0L; }
-	}
-
 	private static string SafeWindowTitle(Process process)
 	{
 		try { return process.MainWindowTitle ?? string.Empty; }
 		catch { return string.Empty; }
-	}
-
-	private static string DescribeTmlCandidate(
-		Process process, uint foregroundPid)
-	{
-		IntPtr window = IntPtr.Zero;
-		try { window = process.MainWindowHandle; }
-		catch { }
-		return "pid=" + process.Id +
-			" window=0x" + window.ToInt64().ToString("X") +
-			" foreground=" + (process.Id == foregroundPid) +
-			" server=" + IsLikelyTmlServer(process) +
-			" score=" + ScoreTmlClient(process, foregroundPid) +
-			" title=\"" + SafeWindowTitle(process) + "\"";
 	}
 
 	private static string ExtractPayloads()
@@ -1139,16 +1047,14 @@ internal static class CombinedLauncher
 	private static bool FilesEqual(string path, byte[] expected)
 	{
 		try {
-			FileInfo info = new FileInfo(path);
-			if (info.Length != expected.Length)
+			byte[] actual = File.ReadAllBytes(path);
+			if (actual.Length != expected.Length)
 				return false;
-
-			using (SHA256 sha = SHA256.Create())
-			using (FileStream existing = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read)) {
-				byte[] actualHash = sha.ComputeHash(existing);
-				byte[] expectedHash = sha.ComputeHash(expected);
-				return actualHash.SequenceEqual(expectedHash);
+			for (int i = 0; i < actual.Length; i++) {
+				if (actual[i] != expected[i])
+					return false;
 			}
+			return true;
 		}
 		catch {
 			return false;

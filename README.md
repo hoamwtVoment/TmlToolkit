@@ -126,6 +126,7 @@ $root = (Get-Location).Path
 | `TmlInventorySlotGrid.cs` | 背包槽位和物品图标控件 |
 | `Vanilla1456Toolkit/` | Terraria 1.4.5.6 原版后端 |
 | `Vanilla1456Toolkit/VanillaXnbTextureDecoder.cs` | 原版物品 XNB 的 CPU 解压与贴图转换 |
+| `Vanilla1456Toolkit/test/ReflectionHarness.cs` | 原版后端差分测试：用桩类型模拟 Terraria，输出可逐行对比的运行轨迹（构建方法见文件头） |
 | `BUILD_COMBINED.ps1` | 双兼容 EXE 打包脚本 |
 | `CODE_FILES.md` | 代码文件清单 |
 

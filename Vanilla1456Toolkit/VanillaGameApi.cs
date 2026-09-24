@@ -103,6 +103,9 @@ namespace Terraria1456Toolkit
 		private readonly MethodInfo _turnToAir;
 		private readonly int _itemTypeCount;
 		private readonly MethodInfo _solidCollision;
+		private readonly FieldInfo _vectorX;
+		private readonly FieldInfo _vectorY;
+		private readonly PropertyInfo _mountActive;
 		private readonly Dictionary<string, FieldInfo> _itemAttributeFields =
 			new Dictionary<string, FieldInfo>(StringComparer.Ordinal);
 
@@ -116,10 +119,8 @@ namespace Terraria1456Toolkit
 		private readonly HashSet<int> _loggedItemIconFailures =
 			new HashSet<int>();
 		private int _itemIconGeneration;
-		private int _itemIconFailureCount;
 		private int _itemIconWorkerRunning;
 		private volatile bool _itemIconWorkerStopping;
-		private volatile string _lastItemIconError = string.Empty;
 		private EventInfo _gameTickEvent;
 		private Action _gameTickHandler;
 		private volatile CheatState _cheatState = new CheatState();
@@ -214,14 +215,6 @@ namespace Terraria1456Toolkit
 		public int ItemIconGeneration
 		{
 			get { return Volatile.Read(ref _itemIconGeneration); }
-		}
-		public int ItemIconFailureCount
-		{
-			get { return Volatile.Read(ref _itemIconFailureCount); }
-		}
-		public string LastItemIconError
-		{
-			get { return _lastItemIconError; }
 		}
 
 		private VanillaGameApi(Assembly assembly)
@@ -359,6 +352,15 @@ namespace Terraria1456Toolkit
 				_playerFields[name] = RequireField(player, name, false);
 			AddOptionalInstanceField(player, "justJumped");
 			AddOptionalInstanceField(player, "gravDir");
+			// Main.screenPosition, Player.position and Player.velocity are all
+			// XNA Vector2 values, and Player.mount is a Terraria.Mount.  Resolve
+			// their members once here instead of on every game tick.
+			BindingFlags instanceMember = BindingFlags.Public |
+				BindingFlags.NonPublic | BindingFlags.Instance;
+			_vectorX = _screenPosition.FieldType.GetField("X", instanceMember);
+			_vectorY = _screenPosition.FieldType.GetField("Y", instanceMember);
+			_mountActive = _playerFields["mount"].FieldType.GetProperty(
+				"Active", instanceMember);
 			Type collision = RequireType("Terraria.Collision");
 			_solidCollision = collision.GetMethods(
 					BindingFlags.Public | BindingFlags.NonPublic |
@@ -510,7 +512,7 @@ namespace Terraria1456Toolkit
 			if (state.LavaImmune)
 				Set(player, "lavaImmune", true);
 			if (state.FastMovement)
-				ApplyFastMovement(player, state.MovementMultiplier, true);
+				ApplyFastMovement(player, state.MovementMultiplier);
 			if (state.HighJump && afterPlayerUpdate)
 				ApplyHighJump(player, state.HighJumpMultiplier);
 			if (state.AdjustableStep && afterPlayerUpdate)
@@ -849,22 +851,11 @@ namespace Terraria1456Toolkit
 			_devLightTilesCheat.SetValue(null, true);
 
 			object screen = _screenPosition.GetValue(null);
-			if (screen == null)
-				return;
-			Type vectorType = screen.GetType();
-			FieldInfo xField = vectorType.GetField(
-				"X",
-				BindingFlags.Public | BindingFlags.NonPublic |
-					BindingFlags.Instance);
-			FieldInfo yField = vectorType.GetField(
-				"Y",
-				BindingFlags.Public | BindingFlags.NonPublic |
-					BindingFlags.Instance);
-			if (xField == null || yField == null)
+			if (screen == null || _vectorX == null || _vectorY == null)
 				return;
 
-			float screenX = Convert.ToSingle(xField.GetValue(screen));
-			float screenY = Convert.ToSingle(yField.GetValue(screen));
+			float screenX = Convert.ToSingle(_vectorX.GetValue(screen));
+			float screenY = Convert.ToSingle(_vectorY.GetValue(screen));
 			int pixelWidth = Convert.ToInt32(_screenWidth.GetValue(null));
 			int pixelHeight = Convert.ToInt32(_screenHeight.GetValue(null));
 			int worldWidth = Convert.ToInt32(_maxTilesX.GetValue(null));
@@ -952,7 +943,7 @@ namespace Terraria1456Toolkit
 			_trainerViewZoomApplied = false;
 		}
 
-		private void ApplyFastMovement(object player, float multiplier, bool assistVelocity)
+		private void ApplyFastMovement(object player, float multiplier)
 		{
 			float safeMultiplier = ClampMultiplier(multiplier, 3f);
 			float targetSpeed = 6f * safeMultiplier;
@@ -961,40 +952,22 @@ namespace Terraria1456Toolkit
 			Set(player, "accRunSpeed", Math.Max(GetFloat(player, "accRunSpeed"), targetSpeed));
 			Set(player, "runAcceleration", Math.Max(GetFloat(player, "runAcceleration"), 0.65f * safeMultiplier));
 
-			if (!assistVelocity)
-				return;
-
 			bool left = GetBool(player, "controlLeft");
 			bool right = GetBool(player, "controlRight");
-			if (left == right)
+			if (left == right || IsMounted(player))
 				return;
-
-			object mount = _playerFields["mount"].GetValue(player);
-			if (mount != null) {
-				PropertyInfo active = mount.GetType().GetProperty(
-					"Active",
-					BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-				if (active != null && Convert.ToBoolean(active.GetValue(mount, null)))
-					return;
-			}
 
 			FieldInfo velocityField = _playerFields["velocity"];
 			object velocity = velocityField.GetValue(player);
-			if (velocity == null)
+			if (velocity == null || _vectorX == null)
 				return;
 
-			FieldInfo xField = velocity.GetType().GetField(
-				"X",
-				BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-			if (xField == null)
-				return;
-
-			float current = Convert.ToSingle(xField.GetValue(velocity));
+			float current = Convert.ToSingle(_vectorX.GetValue(velocity));
 			// Preserve dashes, mounts and any faster velocity supplied by gear.
 			if (Math.Abs(current) >= targetSpeed)
 				return;
 
-			xField.SetValue(velocity, right ? targetSpeed : -targetSpeed);
+			_vectorX.SetValue(velocity, right ? targetSpeed : -targetSpeed);
 			velocityField.SetValue(player, velocity);
 		}
 
@@ -1025,15 +998,10 @@ namespace Terraria1456Toolkit
 
 			FieldInfo velocityField = _playerFields["velocity"];
 			object velocity = velocityField.GetValue(player);
-			if (velocity == null)
-				return;
-			FieldInfo yField = velocity.GetType().GetField(
-				"Y",
-				BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-			if (yField == null)
+			if (velocity == null || _vectorY == null)
 				return;
 
-			float currentY = Convert.ToSingle(yField.GetValue(velocity));
+			float currentY = Convert.ToSingle(_vectorY.GetValue(velocity));
 			float gravityDirection = Convert.ToSingle(gravDirField.GetValue(player));
 			if (currentY * gravityDirection >= 0f)
 				return;
@@ -1052,7 +1020,7 @@ namespace Terraria1456Toolkit
 					ConvertValue(extendedJump, jumpField.FieldType));
 			}
 			currentY *= factor;
-			yField.SetValue(velocity, ConvertValue(currentY, yField.FieldType));
+			_vectorY.SetValue(velocity, ConvertValue(currentY, _vectorY.FieldType));
 			velocityField.SetValue(player, velocity);
 		}
 
@@ -1069,18 +1037,8 @@ namespace Terraria1456Toolkit
 			FieldInfo velocityField = _playerFields["velocity"];
 			object position = positionField.GetValue(player);
 			object velocity = velocityField.GetValue(player);
-			if (position == null || velocity == null)
-				return;
-			Type vectorType = position.GetType();
-			FieldInfo xField = vectorType.GetField(
-				"X",
-				BindingFlags.Public | BindingFlags.NonPublic |
-				BindingFlags.Instance);
-			FieldInfo yField = vectorType.GetField(
-				"Y",
-				BindingFlags.Public | BindingFlags.NonPublic |
-				BindingFlags.Instance);
-			if (xField == null || yField == null)
+			if (position == null || velocity == null ||
+				_vectorX == null || _vectorY == null)
 				return;
 
 			int direction = right ? 1 : -1;
@@ -1095,54 +1053,36 @@ namespace Terraria1456Toolkit
 			int height = GetInt(player, "height");
 
 			object supportProbe = ShiftVector(
-				position, xField, yField, 0f, gravityDirection * 2f);
+				position, 0f, gravityDirection * 2f);
 			if (!HasSolidCollision(supportProbe, width, height))
 				return;
 			object blockedProbe = ShiftVector(
-				position, xField, yField, direction * 3f, 0f);
+				position, direction * 3f, 0f);
 			if (!HasSolidCollision(blockedProbe, width, height))
 				return;
 
 			int maximumLift = Math.Max(1, Math.Min(10, maxBlocks)) * 16;
 			for (int lift = 1; lift <= maximumLift; lift++) {
 				object candidate = ShiftVector(
-					position,
-					xField,
-					yField,
-					direction * 3f,
-					-gravityDirection * lift);
+					position, direction * 3f, -gravityDirection * lift);
 				if (HasSolidCollision(candidate, width, height))
 					continue;
 				object candidateSupport = ShiftVector(
-					candidate,
-					xField,
-					yField,
-					0f,
-					gravityDirection * 2f);
+					candidate, 0f, gravityDirection * 2f);
 				if (!HasSolidCollision(candidateSupport, width, height))
 					continue;
 
-				FieldInfo velocityX = velocity.GetType().GetField(
-					"X",
-					BindingFlags.Public | BindingFlags.NonPublic |
-					BindingFlags.Instance);
-				FieldInfo velocityY = velocity.GetType().GetField(
-					"Y",
-					BindingFlags.Public | BindingFlags.NonPublic |
-					BindingFlags.Instance);
-				if (velocityX == null || velocityY == null)
-					return;
 				float horizontalSpeed = Math.Max(
 					2f, Math.Abs(Convert.ToSingle(
-						velocityX.GetValue(velocity))));
-				velocityX.SetValue(
+						_vectorX.GetValue(velocity))));
+				_vectorX.SetValue(
 					velocity,
 					ConvertValue(
 						direction * horizontalSpeed,
-						velocityX.FieldType));
-				velocityY.SetValue(
+						_vectorX.FieldType));
+				_vectorY.SetValue(
 					velocity,
-					ConvertValue(0f, velocityY.FieldType));
+					ConvertValue(0f, _vectorY.FieldType));
 				positionField.SetValue(player, candidate);
 				velocityField.SetValue(player, velocity);
 				return;
@@ -1157,34 +1097,25 @@ namespace Terraria1456Toolkit
 				new object[] { position, width, height }));
 		}
 
-		private static object ShiftVector(
-			object vector,
-			FieldInfo xField,
-			FieldInfo yField,
-			float deltaX,
-			float deltaY)
+		private object ShiftVector(object vector, float deltaX, float deltaY)
 		{
 			object shifted = Activator.CreateInstance(vector.GetType());
-			float x = Convert.ToSingle(xField.GetValue(vector));
-			float y = Convert.ToSingle(yField.GetValue(vector));
-			xField.SetValue(
+			float x = Convert.ToSingle(_vectorX.GetValue(vector));
+			float y = Convert.ToSingle(_vectorY.GetValue(vector));
+			_vectorX.SetValue(
 				shifted,
-				ConvertValue(x + deltaX, xField.FieldType));
-			yField.SetValue(
+				ConvertValue(x + deltaX, _vectorX.FieldType));
+			_vectorY.SetValue(
 				shifted,
-				ConvertValue(y + deltaY, yField.FieldType));
+				ConvertValue(y + deltaY, _vectorY.FieldType));
 			return shifted;
 		}
 
 		private bool IsMounted(object player)
 		{
 			object mount = _playerFields["mount"].GetValue(player);
-			if (mount == null)
-				return false;
-			PropertyInfo active = mount.GetType().GetProperty(
-				"Active",
-				BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-			return active != null && Convert.ToBoolean(active.GetValue(mount, null));
+			return mount != null && _mountActive != null &&
+				Convert.ToBoolean(_mountActive.GetValue(mount, null));
 		}
 
 		private bool ObserveGameUpdateCountChanged()
@@ -1401,7 +1332,6 @@ namespace Terraria1456Toolkit
 							_itemIconCache[type] = bitmap;
 							_itemIconRetryAfter.Remove(type);
 							Interlocked.Increment(ref _itemIconGeneration);
-							_lastItemIconError = string.Empty;
 							keepBitmap = true;
 						}
 						else if (bitmap == null) {
@@ -1423,7 +1353,9 @@ namespace Terraria1456Toolkit
 					currentType = 0;
 				}
 			}
-			catch (Exception ex) {
+			catch {
+				// Never let a decoding failure escape a thread-pool thread; that
+				// would terminate Terraria. The icon is retried after a delay.
 				if (currentType > 0) {
 					lock (_itemIconSync) {
 						_pendingItemIconSet.Remove(currentType);
@@ -1433,9 +1365,6 @@ namespace Terraria1456Toolkit
 						}
 					}
 				}
-				_lastItemIconError =
-					"图标后台线程：" + DescribeException(ex);
-				Interlocked.Increment(ref _itemIconFailureCount);
 			}
 			finally {
 				Interlocked.Exchange(ref _itemIconWorkerRunning, 0);
@@ -1453,12 +1382,6 @@ namespace Terraria1456Toolkit
 			int type,
 			Exception exception)
 		{
-			string error = exception == null
-				? "贴图读取返回空。"
-				: DescribeException(exception);
-			_lastItemIconError = "ID " + type + "：" + error;
-			Interlocked.Increment(ref _itemIconFailureCount);
-
 			bool shouldLog;
 			lock (_itemIconSync)
 				shouldLog = _loggedItemIconFailures.Add(type);
@@ -1476,7 +1399,7 @@ namespace Terraria1456Toolkit
 					DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") +
 					" [ID " + type + "] " +
 					(exception == null
-						? error
+						? "贴图读取返回空。"
 						: exception.ToString()) +
 					Environment.NewLine,
 					new System.Text.UTF8Encoding(true));
@@ -1712,18 +1635,20 @@ namespace Terraria1456Toolkit
 			_sendData.Invoke(null, args);
 		}
 
-		private void InvokeWithDefaults(MethodInfo method, object target, int firstArgument)
+		private static void InvokeWithDefaults(MethodInfo method, object target, int firstArgument)
 		{
-			ParameterInfo[] parameters = method.GetParameters();
-			object[] args = new object[parameters.Length];
+			object[] args = DefaultArguments(method);
 			args[0] = firstArgument;
-			for (int i = 1; i < args.Length; i++)
-				args[i] = parameters[i].HasDefaultValue ? parameters[i].DefaultValue : DefaultValue(parameters[i].ParameterType);
 			method.Invoke(target, args);
 		}
 
-		private void InvokeWithOptionalDefaults(
+		private static void InvokeWithOptionalDefaults(
 			MethodInfo method, object target)
+		{
+			method.Invoke(target, DefaultArguments(method));
+		}
+
+		private static object[] DefaultArguments(MethodInfo method)
 		{
 			ParameterInfo[] parameters = method.GetParameters();
 			object[] args = new object[parameters.Length];
@@ -1732,10 +1657,10 @@ namespace Terraria1456Toolkit
 					? parameters[i].DefaultValue
 					: DefaultValue(parameters[i].ParameterType);
 			}
-			method.Invoke(target, args);
+			return args;
 		}
 
-		private object DefaultValue(Type type)
+		private static object DefaultValue(Type type)
 		{
 			return type.IsValueType ? Activator.CreateInstance(type) : null;
 		}

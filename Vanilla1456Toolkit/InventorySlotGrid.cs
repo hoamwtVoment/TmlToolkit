@@ -26,6 +26,8 @@ namespace Terraria1456Toolkit
 		private readonly Font _hotkeyFont;
 		private readonly Font _stackFont;
 		private readonly Font _captionFont;
+		private readonly Font _idFont;
+		private readonly Font _compactIdFont;
 		private int _selectedSlot = -1;
 		private int _hoveredSlot = -1;
 
@@ -72,6 +74,8 @@ namespace Terraria1456Toolkit
 			_hotkeyFont = new Font("Microsoft YaHei UI", 7.5F, FontStyle.Bold);
 			_stackFont = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold);
 			_captionFont = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold);
+			_idFont = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold);
+			_compactIdFont = new Font("Microsoft YaHei UI", 7F, FontStyle.Bold);
 			_toolTip = new ToolTip();
 			_toolTip.AutoPopDelay = 10000;
 			_toolTip.InitialDelay = 250;
@@ -100,6 +104,8 @@ namespace Terraria1456Toolkit
 				_hotkeyFont.Dispose();
 				_stackFont.Dispose();
 				_captionFont.Dispose();
+				_idFont.Dispose();
+				_compactIdFont.Dispose();
 			}
 			base.Dispose(disposing);
 		}
@@ -147,13 +153,8 @@ namespace Terraria1456Toolkit
 				return;
 
 			Focus();
-			if (_selectedSlot != slot) {
-				_selectedSlot = slot;
-				Invalidate();
-				EventHandler handler = SelectedSlotChanged;
-				if (handler != null)
-					handler(this, EventArgs.Empty);
-			}
+			if (_selectedSlot != slot)
+				SelectSlotFromInput(slot);
 		}
 
 		protected override void OnMouseMove(MouseEventArgs e)
@@ -215,12 +216,19 @@ namespace Terraria1456Toolkit
 			if (next == _selectedSlot)
 				return;
 
-			_selectedSlot = next;
+			SelectSlotFromInput(next);
+			e.Handled = true;
+		}
+
+		// Unlike the SelectedSlot setter, a user-driven change raises
+		// SelectedSlotChanged.
+		private void SelectSlotFromInput(int slot)
+		{
+			_selectedSlot = slot;
 			Invalidate();
 			EventHandler handler = SelectedSlotChanged;
 			if (handler != null)
 				handler(this, EventArgs.Empty);
-			e.Handled = true;
 		}
 
 		private void DrawSideCaption(Graphics graphics, string text, int firstSlot, LayoutMetrics layout)
@@ -323,17 +331,14 @@ namespace Terraria1456Toolkit
 		private void DrawItemId(Graphics graphics, int id, Rectangle bounds)
 		{
 			string text = id.ToString();
-			float size = bounds.Width < 35 ? 7F : 8F;
-			using (Font idFont = new Font("Microsoft YaHei UI", size, FontStyle.Bold)) {
-				TextRenderer.DrawText(
-					graphics,
-					text,
-					idFont,
-					bounds,
-					Color.FromArgb(230, 236, 246, 255),
-					TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
-					TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
-			}
+			TextRenderer.DrawText(
+				graphics,
+				text,
+				bounds.Width < 35 ? _compactIdFont : _idFont,
+				bounds,
+				Color.FromArgb(230, 236, 246, 255),
+				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
+				TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
 		}
 
 		private static void DrawMouseGlyph(Graphics graphics, Rectangle bounds)
