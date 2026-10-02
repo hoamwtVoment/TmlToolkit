@@ -115,6 +115,36 @@ $root = (Get-Location).Path
 
 `Terraria全物品修改器_原版TML双兼容.exe`
 
+### 重新编译两个注入器
+
+```powershell
+.\ci\Build-Injectors.ps1
+```
+
+tModLoader 注入器必须是 x64，原版注入器必须是 x86，脚本已按此编译。
+
+### 在其他机器上编译 tModLoader UI
+
+`ui.rsp` 写死了本机路径。换一个 tModLoader 安装目录时可以用生成器产出专用的响应文件，不用手改：
+
+```powershell
+.\ci\New-UiRsp.ps1 -TmlDir "D:\steam\steamapps\common\tModLoader" `
+  -DotnetRoot "C:\Program Files\dotnet" -RepoRoot .
+& 'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\Roslyn\csc.exe' `
+  /noconfig '@ui.ci.rsp'
+```
+
+## 持续集成
+
+`.github/workflows/build.yml` 在推送到 `main`、打开 PR 或手动触发时运行：
+
+1. 从 tModLoader 官方 release 下载指定版本的 `tModLoader.zip`（版本与 SHA256 固定在 `TML_VERSION` / `TML_ZIP_SHA256` 两个变量里，升级时一起改），校验哈希后仅用作编译引用，不会打入产物。
+2. 用 `ci/New-UiRsp.ps1` 生成响应文件并编译 tModLoader UI、原版托管界面和两个注入器。
+3. 打包双兼容 EXE，用 `ci/Verify-Components.ps1` 核对 9 个内嵌组件与仓库文件一致。
+4. 运行视野缩放尺寸的离线测试 `test/TmlViewZoomTest.cs`，并把整合 EXE 作为构件上传（保留 14 天）。
+
+两个 C++ 原生引导 DLL 的编译参数当初没有记录，CI 暂不重编，直接使用仓库内的二进制；补齐后可在工作流中加一步 MSVC 编译。
+
 ## 代码结构
 
 | 路径 | 用途 |

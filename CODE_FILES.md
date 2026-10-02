@@ -2,9 +2,13 @@
 
 Root: `C:\Users\hoamwtvoment\Pictures\ctf-sandbox-orchestrator\TmlToolkit`
 
-Total: **27**
+Total: **31**
 
+- `.github/workflows/build.yml`
 - `BUILD_COMBINED.ps1`
+- `ci/Build-Injectors.ps1`
+- `ci/New-UiRsp.ps1`
+- `ci/Verify-Components.ps1`
 - `CombinedToolkit/CombinedLauncher.cs`
 - `ManagedBootstrap.cs`
 - `TmlBootstrap.cpp`

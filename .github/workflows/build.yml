@@ -1,0 +1,93 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # tModLoader release used as compile-time references for the TML UI build.
+  # Bump together with TML_ZIP_SHA256 (sha256 of that release's tModLoader.zip).
+  TML_VERSION: '2026.08.3.0'
+  TML_ZIP_SHA256: '61e865f3702b12ce4a26c5a90b9de99a12c65ffc228455eb3390ce54af1eab15'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Download tModLoader references
+        shell: pwsh
+        run: |
+          $url = "https://github.com/tModLoader/tModLoader/releases/download/v$env:TML_VERSION/tModLoader.zip"
+          $zip = "$env:RUNNER_TEMP\tModLoader.zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:TML_ZIP_SHA256.ToLower()) { throw "tModLoader.zip hash mismatch: $hash" }
+          Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\tml"
+
+      - name: Generate UI response file
+        shell: pwsh
+        run: ci\New-UiRsp.ps1 -TmlDir "$env:RUNNER_TEMP\tml" -DotnetRoot "$env:ProgramFiles\dotnet" -RepoRoot .
+
+      - name: Build TML UI
+        shell: pwsh
+        run: |
+          $csc = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -latest -find 'MSBuild\**\Bin\Roslyn\csc.exe' | Select-Object -First 1
+          & $csc /noconfig '@ui.ci.rsp'
+          exit $LASTEXITCODE
+
+      - name: Build vanilla managed DLL
+        shell: pwsh
+        run: |
+          $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe"
+          & $csc /nologo /target:library /platform:anycpu /optimize+ `
+            "/out:$PWD\Vanilla1456Toolkit\Terraria1456Toolkit.Managed.dll" `
+            /reference:System.dll /reference:System.Core.dll `
+            /reference:System.Drawing.dll /reference:System.Windows.Forms.dll `
+            "/resource:$PWD\Vanilla1456Toolkit\items.tsv,Terraria1456Toolkit.items.tsv" `
+            "$PWD\Vanilla1456Toolkit\EntryPoint.cs" `
+            "$PWD\Vanilla1456Toolkit\TrainerForm.cs" `
+            "$PWD\Vanilla1456Toolkit\InventorySlotGrid.cs" `
+            "$PWD\Vanilla1456Toolkit\VanillaGameApi.cs" `
+            "$PWD\Vanilla1456Toolkit\VanillaXnbTextureDecoder.cs"
+          exit $LASTEXITCODE
+
+      - name: Build injectors
+        shell: pwsh
+        run: ci\Build-Injectors.ps1 -RepoRoot .
+
+      # The two C++ bootstrap DLLs are not rebuilt (their flags were never
+      # documented); the committed binaries are packed as-is.
+      - name: Pack combined launcher
+        shell: pwsh
+        run: .\BUILD_COMBINED.ps1
+
+      - name: Verify embedded components
+        shell: pwsh
+        run: ci\Verify-Components.ps1 -RepoRoot .
+
+      - name: Run zoom sizing test
+        shell: pwsh
+        run: |
+          $csc = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -latest -find 'MSBuild\**\Bin\Roslyn\csc.exe' | Select-Object -First 1
+          & $csc /nologo "/out:$env:RUNNER_TEMP\TmlViewZoomTest.exe" `
+            test\TmlViewZoomTest.cs TmlViewZoom.cs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP\TmlViewZoomTest.exe"
+          exit $LASTEXITCODE
+
+      - name: Upload combined launcher
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-launcher
+          path: Terraria全物品修改器_原版TML双兼容.exe
+          retention-days: 14
