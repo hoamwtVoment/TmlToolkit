@@ -20,7 +20,9 @@ jobs:
 
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '8.0.0'
+          # Earliest .NET 8 SDK band; its bundled shared frameworks are 8.0.0,
+          # which New-UiRsp.ps1 -RuntimeVersion selects verbatim below.
+          dotnet-version: '8.0.100'
 
       - name: Download tModLoader references
         shell: pwsh
