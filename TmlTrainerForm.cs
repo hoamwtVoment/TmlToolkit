@@ -200,7 +200,7 @@ namespace TerrariaTmlToolkit
 		private const int VanillaRenderTargetPadding = 192;
 
 		private static readonly string[] ItemIntegerFields = {
-			"type", "stack", "damage", "useTime", "useAnimation",
+			"type", "stack", "prefix", "damage", "useTime", "useAnimation",
 			"shoot", "useAmmo", "pick", "axe", "hammer", "defense", "crit",
 			"mana", "healLife", "healMana", "fishingPole"
 		};
@@ -883,7 +883,7 @@ namespace TerrariaTmlToolkit
 			editorSide.SetColumnSpan(editorTitle, 4);
 
 			string[] names = {
-				"type", "stack", "damage", "knockBack",
+				"type", "stack", "prefix", "damage", "knockBack",
 				"useTime", "useAnimation", "scale", "shootSpeed", "shoot",
 				"useAmmo", "pick", "axe", "hammer", "defense", "crit",
 				"mana", "healLife", "healMana", "fishingPole"
