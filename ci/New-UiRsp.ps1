@@ -7,7 +7,11 @@ param(
     [Parameter(Mandatory = $true)][string]$DotnetRoot,
     [string]$RepoRoot = (Get-Location).Path,
     [string]$OutFile = 'ui.ci.rsp',
-    [string]$OutputPath = ''
+    [string]$OutputPath = '',
+    # When set, both shared frameworks must be exactly this version (e.g.
+    # '8.0.0'). Compiling against the oldest supported runtime keeps the build
+    # loadable on every later 8.x install; leaving it empty picks the newest.
+    [string]$RuntimeVersion = ''
 )
 $ErrorActionPreference = 'Stop'
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
@@ -20,6 +24,15 @@ function LatestVersionDir([string]$parent) {
     $dirs |
         Sort-Object { [version]($_.Name -replace '^(\d+(\.\d+){0,3}).*$', '$1') } -Descending |
         Select-Object -First 1
+}
+
+function ResolveVersionDir([string]$parent, [string]$exact) {
+    if (-not $exact) { return LatestVersionDir $parent }
+    $path = Join-Path $parent $exact
+    if (-not (Test-Path -LiteralPath $path)) {
+        throw "runtime $exact not found under $parent"
+    }
+    Get-Item -LiteralPath $path
 }
 
 function RequireFile([string]$p) {
@@ -46,8 +59,8 @@ function IsManagedAssembly([string]$path) {
     }
 }
 
-$netcore = LatestVersionDir (Join-Path $DotnetRoot 'shared\Microsoft.NETCore.App')
-$desktop = LatestVersionDir (Join-Path $DotnetRoot 'shared\Microsoft.WindowsDesktop.App')
+$netcore = ResolveVersionDir (Join-Path $DotnetRoot 'shared\Microsoft.NETCore.App') $RuntimeVersion
+$desktop = ResolveVersionDir (Join-Path $DotnetRoot 'shared\Microsoft.WindowsDesktop.App') $RuntimeVersion
 $tml = (Resolve-Path -LiteralPath $TmlDir).Path
 
 $refs = @()

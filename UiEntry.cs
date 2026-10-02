@@ -48,7 +48,7 @@ public static class UiEntry
 			}
 		}
 
-		if (signal == null || !signal.Wait(TimeSpan.FromSeconds(15))) {
+		if (signal == null || !signal.Wait(TimeSpan.FromSeconds(15.0))) {
 			LogError(new TimeoutException("TML trainer UI startup timed out."));
 			return -2;
 		}

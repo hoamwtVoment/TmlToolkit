@@ -20,7 +20,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '8.0.0'
 
       - name: Download tModLoader references
         shell: pwsh
@@ -34,7 +34,7 @@ jobs:
 
       - name: Generate UI response file
         shell: pwsh
-        run: ci\New-UiRsp.ps1 -TmlDir "$env:RUNNER_TEMP\tml" -DotnetRoot "$env:ProgramFiles\dotnet" -RepoRoot .
+        run: ci\New-UiRsp.ps1 -TmlDir "$env:RUNNER_TEMP\tml" -DotnetRoot "$env:ProgramFiles\dotnet" -RepoRoot . -RuntimeVersion '8.0.0'
 
       - name: Build TML UI
         shell: pwsh
@@ -66,6 +66,11 @@ jobs:
 
       # The two C++ bootstrap DLLs are not rebuilt (their flags were never
       # documented); the committed binaries are packed as-is.
+      #
+      # setup-dotnet is pinned to .NET 8.0.0 and New-UiRsp selects exactly that
+      # shared framework: compiling against newer servicing references can bind
+      # APIs the user's rolled-forward 8.x runtime does not have (this bit us
+      # with TimeSpan.FromSeconds(long), which does not exist in .NET 8).
       - name: Pack combined launcher
         shell: pwsh
         run: .\BUILD_COMBINED.ps1
