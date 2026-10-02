@@ -94,6 +94,7 @@ namespace TerrariaTmlToolkit
 		public bool InfiniteFlight;
 		public bool NoclipHorizontal;
 		public bool NoclipFull;
+		public bool AdjustableGrabRange;
 		public bool AdjustableMaxMinions;
 		public bool AdjustableMaxBuffs;
 		public bool FullBright;
@@ -112,6 +113,7 @@ namespace TerrariaTmlToolkit
 		public int MaxMinions = 10;
 		public int MaxBuffs = 100;
 		public int StepBlocks = 3;
+		public int GrabRange = 42;
 		public float MinimumViewZoom = TmlViewZoom.DefaultMinimumZoom;
 		public bool DrawToScreenZoom;
 	}
@@ -391,6 +393,8 @@ namespace TerrariaTmlToolkit
 		private CheckBox _infiniteFlight;
 		private CheckBox _noclipHorizontal;
 		private CheckBox _noclipFull;
+		private CheckBox _adjustableGrabRange;
+		private NumericUpDown _grabRange;
 		private CheckBox _adjustableMaxMinions;
 		private CheckBox _adjustableMaxBuffs;
 		private CheckBox _fullBright;
@@ -568,6 +572,10 @@ namespace TerrariaTmlToolkit
 			_noclipFull = AddOption(
 				movement,
 				"全穿墙（无视所有方块碰撞；重力归零，用 ↑/↓ 键升降）");
+			_adjustableGrabRange = AddOption(movement, "自定义物品拾取范围");
+			_grabRange = AddIntegerValueRow(
+				movement, "拾取范围", 42M, 1M, 9999M, "px",
+				delegate { UpdateCheatSnapshot(); });
 
 			_adjustableMaxMinions = AddOption(capacity, "自定义最大仆从容量");
 			_maxMinions = AddIntegerValueRow(
@@ -656,7 +664,7 @@ namespace TerrariaTmlToolkit
 				_noPotionCooldown, _clearDebuffs, _noKnockback,
 				_noFallDamage, _lavaImmune, _fastMovement, _highJump, _infiniteExtraJumps, _adjustableStep,
 				_adjustableGravity, _adjustableMaxFallSpeed, _unlimitedFallSpeed,
-				_infiniteFlight, _noclipHorizontal, _noclipFull,
+				_infiniteFlight, _noclipHorizontal, _noclipFull, _adjustableGrabRange,
 				_adjustableMaxMinions, _adjustableMaxBuffs,
 				_fullBright,
 				_unrestrictedView, _unrestrictedWorldBounds,
@@ -1811,6 +1819,8 @@ namespace TerrariaTmlToolkit
 					NoclipHorizontal = _noclipHorizontal != null &&
 						_noclipHorizontal.Checked,
 					NoclipFull = _noclipFull != null && _noclipFull.Checked,
+					AdjustableGrabRange = _adjustableGrabRange != null &&
+						_adjustableGrabRange.Checked,
 					AdjustableMaxMinions = _adjustableMaxMinions != null &&
 						_adjustableMaxMinions.Checked,
 					AdjustableMaxBuffs = _adjustableMaxBuffs != null &&
@@ -1848,6 +1858,9 @@ namespace TerrariaTmlToolkit
 					StepBlocks = _stepBlocks == null
 						? 3
 						: Decimal.ToInt32(_stepBlocks.Value),
+					GrabRange = _grabRange == null
+						? 42
+						: Decimal.ToInt32(_grabRange.Value),
 					MinimumViewZoom = _farthestViewZoom == null
 						? TmlViewZoom.DefaultMinimumZoom
 						: Decimal.ToSingle(_farthestViewZoom.Value),
@@ -2890,6 +2903,7 @@ namespace TerrariaTmlToolkit
 					ClampPlayerToRealWorld(self, snapshot.WorldEdgeSafetyTiles);
 				if (snapshot.NoclipFull)
 					ApplyFullNoclip(self);
+				ApplyGrabRange(snapshot);
 			}
 			catch (Exception ex) {
 				_lastGameThreadError = DescribeException(ex);
@@ -2923,6 +2937,22 @@ namespace TerrariaTmlToolkit
 				player.maxFallSpeed = float.MaxValue;
 			else if (snapshot.AdjustableMaxFallSpeed)
 				player.maxFallSpeed = Math.Max(0F, snapshot.MaxFallSpeed);
+		}
+
+		private static int _vanillaGrabRange = -1;
+
+		private static void ApplyGrabRange(CheatSnapshot snapshot)
+		{
+			if (_vanillaGrabRange < 0) {
+				try { _vanillaGrabRange = Player.defaultItemGrabRange; }
+				catch { _vanillaGrabRange = 42; }
+			}
+			// The static base feeds Player.GetItemGrabRange, which drives both the
+			// vacuum pull on items and the pickup rectangle.
+			Player.defaultItemGrabRange =
+				snapshot != null && snapshot.AdjustableGrabRange
+					? Math.Max(1, snapshot.GrabRange)
+					: _vanillaGrabRange;
 		}
 
 		private void TryAttachTileCollisionHook()

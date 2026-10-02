@@ -214,6 +214,10 @@ internal static class CombinedLauncher
 			AddPreviewOption(movement, "可调 Step（自动走上完整方块）");
 			AddPreviewValue(movement, "最大整格数", "3 格");
 			AddPreviewOption(movement, "无限翅膀/火箭时间");
+			AddPreviewOption(movement, "左右穿墙（穿过两侧墙体，保留上下碰撞）");
+			AddPreviewOption(movement, "全穿墙（重力归零，↑/↓ 键升降）");
+			AddPreviewOption(movement, "自定义物品拾取范围");
+			AddPreviewValue(movement, "拾取范围", "42 px");
 
 			AddPreviewOption(capacity, "自定义最大仆从容量");
 			AddPreviewValue(capacity, "最大仆从容量", "10 个");
@@ -271,7 +275,7 @@ internal static class CombinedLauncher
 			left.Controls.Add(searchTitle, 0, 0);
 			TextBox search = new TextBox();
 			search.Dock = DockStyle.Fill;
-			search.Text = "注入后可搜索全部物品";
+			search.Text = "注入后可搜索全部物品，勾选“特殊物品”可显示并强制生成失效模组占位物品";
 			left.Controls.Add(search, 0, 1);
 			ListView items = NewPreviewList();
 			items.Columns.Add("ID", 80);
@@ -317,6 +321,7 @@ internal static class CombinedLauncher
 			})
 				AddPreviewValue(form, field, "0");
 			AddPreviewOption(form, "自动挥舞 / 自动使用");
+			AddPreviewOption(form, "自定义字段（任意物品字段按名读/写）");
 			Button apply = NewPreviewButton("应用修改后的属性");
 			apply.Margin = new Padding(24, 14, 3, 3);
 			form.Controls.Add(apply);
