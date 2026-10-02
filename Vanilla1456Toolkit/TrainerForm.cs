@@ -569,7 +569,7 @@ namespace Terraria1456Toolkit
 			AddNumericItemAttribute(fields, 6, 2, "hammer", "锤力", 0M, 100000M, 0, 1M);
 			AddNumericItemAttribute(fields, 7, 0, "fishingPole", "渔力", 0M, 100000M, 0, 1M);
 			AddNumericItemAttribute(fields, 7, 2, "defense", "防御", -100000M, 1000000M, 0, 1M);
-			AddNumericItemAttribute(fields, 8, 0, "crit", "暴击", -100000M, 1000000M, 0, 1M);
+			AddNumericItemAttribute(fields, 8, 0, "crit", "暴击率", -100000M, 1000000M, 0, 1M);
 			AddNumericItemAttribute(fields, 8, 2, "mana", "耗魔", 0M, 100000M, 0, 1M);
 			AddNumericItemAttribute(fields, 9, 0, "healLife", "生命回复", -100000M, 1000000M, 0, 1M);
 			AddNumericItemAttribute(fields, 9, 2, "healMana", "魔力回复", -100000M, 1000000M, 0, 1M);

@@ -313,7 +313,7 @@ internal static class CombinedLauncher
 			form.AutoScroll = true;
 			fields.Controls.Add(form);
 			foreach (string field in new[] {
-				"数量", "伤害", "暴击", "击退", "使用时间", "使用动画", "射弹速度", "尺寸倍率"
+				"数量", "伤害", "暴击率", "击退", "使用时间", "使用动画", "射弹速度", "尺寸倍率"
 			})
 				AddPreviewValue(form, field, "0");
 			AddPreviewOption(form, "自动挥舞 / 自动使用");
