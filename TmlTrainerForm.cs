@@ -39,6 +39,7 @@ namespace TerrariaTmlToolkit
 		public string InternalName { get; set; }
 		public string ChineseName { get; set; }
 		public string EnglishName { get; set; }
+		public bool IsUnloaded { get; set; }
 	}
 
 	internal sealed class InventoryEntry
@@ -226,6 +227,8 @@ namespace TerrariaTmlToolkit
 			new Dictionary<string, NumericUpDown>(StringComparer.Ordinal);
 		private CheckBox _itemEditorAutoReuse;
 		private ComboBox _itemEditorPrefixBox;
+		private TextBox _itemEditorCustomName;
+		private TextBox _itemEditorCustomValue;
 		private readonly HashSet<string> _itemEditorChangedFields = new HashSet<string>(StringComparer.Ordinal);
 		private bool _applyingItemEditorSnapshot;
 		private DataGridView _historyGrid;
@@ -241,6 +244,7 @@ namespace TerrariaTmlToolkit
 		private Button _remoteCopyIdButton;
 		private InventoryEntry _selectedRemoteItem;
 		private TextBox _searchBox;
+		private CheckBox _specialItemsToggle;
 		private TextBox _historySearch;
 		private NumericUpDown _stackBox;
 		private Label _selectedLabel;
@@ -762,6 +766,12 @@ namespace TerrariaTmlToolkit
 			_stackBox.Value = 1;
 			rightTop.Controls.Add(_stackBox);
 
+			_specialItemsToggle = new CheckBox();
+			_specialItemsToggle.Text = "特殊物品";
+			_specialItemsToggle.SetBounds(180, 11, 150, 27);
+			_specialItemsToggle.CheckedChanged += delegate { ApplyItemFilter(); };
+			rightTop.Controls.Add(_specialItemsToggle);
+
 			Button give = NewButton("获取到背包", 10, 48, 145);
 			give.Click += delegate { GiveSelectedItem(); };
 			rightTop.Controls.Add(give);
@@ -862,13 +872,13 @@ namespace TerrariaTmlToolkit
 			editorSide.Margin = new Padding(6, 0, 0, 0);
 			editorSide.Padding = new Padding(8);
 			editorSide.ColumnCount = 4;
-			editorSide.RowCount = 15;
+			editorSide.RowCount = 16;
 			editorSide.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
 			editorSide.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
 			editorSide.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
 			editorSide.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
 			editorSide.RowStyles.Add(new RowStyle(SizeType.Absolute, 35F));
-			for (int row = 1; row <= 12; row++)
+			for (int row = 1; row <= 13; row++)
 				editorSide.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
 			editorSide.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F));
 			editorSide.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
@@ -924,11 +934,35 @@ namespace TerrariaTmlToolkit
 			editorSide.Controls.Add(_itemEditorAutoReuse, 1, 12);
 			editorSide.SetColumnSpan(_itemEditorAutoReuse, 3);
 
+			Label customFieldLabel = new Label();
+			customFieldLabel.Text = "自定义字段";
+			customFieldLabel.Dock = DockStyle.Fill;
+			customFieldLabel.TextAlign = ContentAlignment.MiddleLeft;
+			editorSide.Controls.Add(customFieldLabel, 0, 13);
+			FlowLayoutPanel customFieldPanel = new FlowLayoutPanel();
+			customFieldPanel.Dock = DockStyle.Fill;
+			customFieldPanel.FlowDirection = FlowDirection.LeftToRight;
+			customFieldPanel.WrapContents = false;
+			_itemEditorCustomName = new TextBox();
+			_itemEditorCustomName.Width = 110;
+			customFieldPanel.Controls.Add(_itemEditorCustomName);
+			_itemEditorCustomValue = new TextBox();
+			_itemEditorCustomValue.Width = 90;
+			customFieldPanel.Controls.Add(_itemEditorCustomValue);
+			Button customRead = NewButton("读", 0, 0, 40);
+			customRead.Click += delegate { QueueReadCustomItemField(); };
+			customFieldPanel.Controls.Add(customRead);
+			Button customWrite = NewButton("写", 0, 0, 40);
+			customWrite.Click += delegate { QueueWriteCustomItemField(); };
+			customFieldPanel.Controls.Add(customWrite);
+			editorSide.Controls.Add(customFieldPanel, 1, 13);
+			editorSide.SetColumnSpan(customFieldPanel, 3);
+
 			FlowLayoutPanel writePanel = new FlowLayoutPanel();
 			writePanel.Dock = DockStyle.Fill;
 			writePanel.FlowDirection = FlowDirection.LeftToRight;
 			writePanel.Padding = new Padding(0, 7, 0, 0);
-			editorSide.Controls.Add(writePanel, 0, 13);
+			editorSide.Controls.Add(writePanel, 0, 14);
 			editorSide.SetColumnSpan(writePanel, 4);
 
 			Button readAgain = NewButton("从槽位读取", 0, 0, 125);
@@ -944,7 +978,7 @@ namespace TerrariaTmlToolkit
 			_itemEditorStatusLabel.ForeColor = Color.Gainsboro;
 			_itemEditorStatusLabel.Text =
 				"写入在 Terraria 主线程执行；个别版本缺少的字段会跳过，不会使游戏崩溃。";
-			editorSide.Controls.Add(_itemEditorStatusLabel, 0, 14);
+			editorSide.Controls.Add(_itemEditorStatusLabel, 0, 15);
 			editorSide.SetColumnSpan(_itemEditorStatusLabel, 4);
 
 			RefreshInventory();
@@ -1153,6 +1187,7 @@ namespace TerrariaTmlToolkit
 				SetItemEditorStatus("请先选择槽位。", true);
 				return;
 			}
+			bool allowSpecialItems = AllowSpecialItems();
 			ItemAttributeSnapshot requested = new ItemAttributeSnapshot();
 			requested.Slot = slot;
 			foreach (KeyValuePair<string, NumericUpDown> pair in _itemEditorNumbers) {
@@ -1191,17 +1226,24 @@ namespace TerrariaTmlToolkit
 								"type",
 								"物品 ID 必须在 0 到 " +
 								(ItemLoader.ItemCount - 1) + " 之间");
-						if (IsUnloadedItemType(requestedType))
-							throw new InvalidOperationException(
-								"该 ID 是 tModLoader 内部的失效模组占位物品，" +
-								"直接生成会导致人物保存失败。");
-
 						if (requestedType == 0) {
 							item.TurnToAir();
 						}
 						else {
-							if (requestedType != item.type)
-								item.SetDefaults(requestedType);
+							if (requestedType != item.type) {
+								if (IsUnloadedItemType(requestedType)) {
+									if (!allowSpecialItems)
+										throw new InvalidOperationException(
+											"该 ID 是 tModLoader 内部的失效模组占位物品，" +
+											"勾选“特殊物品”后才能生成。");
+									player.inventory[requested.Slot] =
+										CreateUnloadedPlaceholder(1);
+									item = player.inventory[requested.Slot];
+								}
+								else {
+									item.SetDefaults(requestedType);
+								}
+							}
 
 							foreach (KeyValuePair<string, object> pair in requested.Values) {
 								// type is validated above and is never raw-written.
@@ -1233,6 +1275,133 @@ namespace TerrariaTmlToolkit
 			}
 			catch (Exception ex) {
 				SetItemEditorStatus("无法提交写入任务：" + ex.GetType().Name, true);
+			}
+		}
+
+		private void QueueReadCustomItemField()
+		{
+			int slot = _selectedSlot;
+			string fieldName = _itemEditorCustomName == null
+				? null
+				: _itemEditorCustomName.Text.Trim();
+			if (slot < 0 || string.IsNullOrEmpty(fieldName)) {
+				SetItemEditorStatus("请先选择槽位，并输入要读取的字段名。", true);
+				return;
+			}
+			QueueGameThreadAction(delegate {
+				string error = null;
+				string text = null;
+				try {
+					Player player = Main.LocalPlayer;
+					if (player == null || !player.active || player.inventory == null ||
+						slot >= player.inventory.Length)
+						throw new InvalidOperationException("玩家或槽位当前不可用");
+					Item item = player.inventory[slot];
+					if (item == null || item.IsAir)
+						throw new InvalidOperationException("槽位没有物品");
+					object value;
+					if (!TryReadItemField(item, fieldName, out value))
+						throw new InvalidOperationException("字段不存在：" + fieldName);
+					text = value == null
+						? "(null)"
+						: Convert.ToString(value, CultureInfo.InvariantCulture);
+				}
+				catch (Exception ex) {
+					error = ex.GetType().Name + ": " + ex.Message;
+				}
+				PostToUi(delegate {
+					if (!string.IsNullOrEmpty(error))
+						SetItemEditorStatus("自定义字段读取失败：" + error, true);
+					else {
+						if (_itemEditorCustomValue != null)
+							_itemEditorCustomValue.Text = text;
+						SetItemEditorStatus("已读取字段 " + fieldName + "。", false);
+					}
+				});
+			});
+		}
+
+		private void QueueWriteCustomItemField()
+		{
+			int slot = _selectedSlot;
+			string fieldName = _itemEditorCustomName == null
+				? null
+				: _itemEditorCustomName.Text.Trim();
+			string raw = _itemEditorCustomValue == null
+				? ""
+				: _itemEditorCustomValue.Text.Trim();
+			if (slot < 0 || string.IsNullOrEmpty(fieldName)) {
+				SetItemEditorStatus("请先选择槽位，并输入要写入的字段名。", true);
+				return;
+			}
+			QueueGameThreadAction(delegate {
+				string error = null;
+				try {
+					Player player = Main.LocalPlayer;
+					if (player == null || !player.active || player.inventory == null ||
+						slot >= player.inventory.Length)
+						throw new InvalidOperationException("玩家或槽位当前不可用");
+					Item item = player.inventory[slot];
+					if (item == null || item.IsAir)
+						throw new InvalidOperationException("槽位没有物品");
+					if (!TryWriteItemFieldText(item, fieldName, raw))
+						throw new InvalidOperationException("字段不存在或无法写入：" + fieldName);
+					SyncSlot(player, slot);
+				}
+				catch (Exception ex) {
+					error = ex.GetType().Name + ": " + ex.Message;
+				}
+				PostToUi(delegate {
+					if (!string.IsNullOrEmpty(error))
+						SetItemEditorStatus("自定义字段写入失败：" + error, true);
+					else {
+						SetItemEditorStatus("已写入字段 " + fieldName + "。", false);
+						RefreshInventory();
+					}
+				});
+			});
+		}
+
+		private static bool TryWriteItemFieldText(Item item, string fieldName, string raw)
+		{
+			try {
+				FieldInfo field = typeof(Item).GetField(
+					fieldName,
+					BindingFlags.Public | BindingFlags.NonPublic |
+					BindingFlags.Instance);
+				if (field == null || field.IsInitOnly)
+					return false;
+				Type targetType = Nullable.GetUnderlyingType(field.FieldType) ??
+					field.FieldType;
+				object converted;
+				if (targetType.IsEnum) {
+					int numeric;
+					if (!int.TryParse(
+						raw, NumberStyles.Integer, CultureInfo.InvariantCulture,
+						out numeric))
+						return false;
+					converted = Enum.ToObject(targetType, numeric);
+				}
+				else if (targetType == typeof(bool)) {
+					bool boolean;
+					if (bool.TryParse(raw, out boolean))
+						converted = boolean;
+					else if (raw == "1")
+						converted = true;
+					else if (raw == "0")
+						converted = false;
+					else
+						return false;
+				}
+				else {
+					converted = Convert.ChangeType(
+						raw, targetType, CultureInfo.InvariantCulture);
+				}
+				field.SetValue(item, converted);
+				return true;
+			}
+			catch {
+				return false;
 			}
 		}
 
@@ -4209,6 +4378,25 @@ namespace TerrariaTmlToolkit
 			}
 		}
 
+		private bool AllowSpecialItems()
+		{
+			return _specialItemsToggle != null && _specialItemsToggle.Checked;
+		}
+
+		private static Item CreateUnloadedPlaceholder(int stack)
+		{
+			// Mirror ItemIO's saved format so the placeholder keeps a
+			// non-null data tag; a bare SetDefaults leaves it null and
+			// crashes PlayerIO.SaveInventory.
+			Terraria.ModLoader.IO.TagCompound tag = new Terraria.ModLoader.IO.TagCompound();
+			tag.Set("mod", "ModLoader");
+			tag.Set("name", "UnloadedItem");
+			tag.Set("data", new Terraria.ModLoader.IO.TagCompound());
+			if (stack > 1)
+				tag.Set("stack", stack);
+			return Terraria.ModLoader.IO.ItemIO.Load(tag);
+		}
+
 		private static bool IsBrokenUnloadedItem(Item item)
 		{
 			if (item == null || item.IsAir || item.ModItem == null ||
@@ -4325,19 +4513,18 @@ namespace TerrariaTmlToolkit
 				Item sample;
 				if (!ContentSamples.ItemsByType.TryGetValue(type, out sample) || sample == null || sample.IsAir)
 					continue;
-				// UnloadedItem is an internal placeholder. Creating it with
-				// QuickSpawnItem/SetDefaults leaves its saved TagCompound null,
-				// which crashes PlayerIO.SaveInventory.
-				if (IsUnloadedItemType(type))
-					continue;
+				bool unloaded = IsUnloadedItemType(type);
 				string persistent;
 				if (!ContentSamples.ItemPersistentIdsByNetIds.TryGetValue(type, out persistent))
 					persistent = "Item_" + type;
 				ItemEntry item = new ItemEntry {
 					Id = type,
 					InternalName = persistent,
-					ChineseName = Lang.GetItemNameValue(type),
-					EnglishName = persistent
+					ChineseName = unloaded
+						? Lang.GetItemNameValue(type) + "（特殊）"
+						: Lang.GetItemNameValue(type),
+					EnglishName = persistent,
+					IsUnloaded = unloaded
 				};
 				_allItems.Add(item);
 				_itemsById[type] = item;
@@ -4350,6 +4537,8 @@ namespace TerrariaTmlToolkit
 				return;
 			string query = _searchBox.Text.Trim();
 			IEnumerable<ItemEntry> result = _allItems;
+			if (!AllowSpecialItems())
+				result = result.Where(delegate(ItemEntry x) { return !x.IsUnloaded; });
 			int exactId;
 			if (int.TryParse(query, out exactId))
 				result = result.Where(delegate(ItemEntry x) { return x.Id == exactId; });
@@ -4408,19 +4597,25 @@ namespace TerrariaTmlToolkit
 			ItemEntry selected = _selectedItem;
 			int amount = Decimal.ToInt32(_stackBox.Value);
 			try {
-				if (IsUnloadedItemType(selected.Id))
+				bool spawnUnloaded = IsUnloadedItemType(selected.Id);
+				if (spawnUnloaded && !AllowSpecialItems())
 					throw new InvalidOperationException(
-						"失效模组占位物品不能生成，否则会导致人物保存失败。");
+						"失效模组占位物品默认不生成；勾选“特殊物品”后可强制生成。");
 				QueueGameThreadAction(delegate {
 					string error = null;
 					try {
 						Player player = Main.LocalPlayer;
 						if (player == null || !player.active)
 							throw new InvalidOperationException("本地玩家尚未进入世界。");
-						player.QuickSpawnItem(
-							player.GetSource_Misc("TerrariaTmlToolkit"),
-							selected.Id,
-							amount);
+						if (spawnUnloaded)
+							player.QuickSpawnItem(
+								player.GetSource_Misc("TerrariaTmlToolkit"),
+								CreateUnloadedPlaceholder(amount));
+						else
+							player.QuickSpawnItem(
+								player.GetSource_Misc("TerrariaTmlToolkit"),
+								selected.Id,
+								amount);
 					}
 					catch (Exception ex) {
 						error = ex.Message;
@@ -4447,9 +4642,10 @@ namespace TerrariaTmlToolkit
 			int slot = _selectedSlot;
 			int amount = Decimal.ToInt32(_stackBox.Value);
 			try {
-				if (IsUnloadedItemType(selected.Id))
+				bool swapUnloaded = IsUnloadedItemType(selected.Id);
+				if (swapUnloaded && !AllowSpecialItems())
 					throw new InvalidOperationException(
-						"失效模组占位物品不能写入槽位，否则会导致人物保存失败。");
+						"失效模组占位物品默认不写入槽位；勾选“特殊物品”后可强制写入。");
 				QueueGameThreadAction(delegate {
 					string error = null;
 					try {
@@ -4457,9 +4653,13 @@ namespace TerrariaTmlToolkit
 						if (player == null || !player.active ||
 							player.inventory == null || slot >= player.inventory.Length)
 							throw new InvalidOperationException("玩家或槽位当前不可用。");
-						Item item = player.inventory[slot];
-						item.SetDefaults(selected.Id);
-						item.stack = Math.Min(amount, Math.Max(1, item.maxStack));
+						if (swapUnloaded)
+							player.inventory[slot] = CreateUnloadedPlaceholder(amount);
+						else {
+							Item item = player.inventory[slot];
+							item.SetDefaults(selected.Id);
+							item.stack = Math.Min(amount, Math.Max(1, item.maxStack));
+						}
 						SyncSlot(player, slot);
 					}
 					catch (Exception ex) {
