@@ -92,6 +92,8 @@ namespace TerrariaTmlToolkit
 		public bool InstantRespawn;
 		public bool AdjustableStep;
 		public bool InfiniteFlight;
+		public bool NoclipHorizontal;
+		public bool NoclipFull;
 		public bool AdjustableMaxMinions;
 		public bool AdjustableMaxBuffs;
 		public bool FullBright;
@@ -196,6 +198,12 @@ namespace TerrariaTmlToolkit
 		private delegate void BordersMovementDetour(BordersMovementOrig orig, Player self);
 		private delegate void ClampScreenPositionOrig();
 		private delegate void ClampScreenPositionDetour(ClampScreenPositionOrig orig);
+		private delegate XnaVector2 TileCollisionOrig(
+			XnaVector2 Position, XnaVector2 Vector, int Width, int Height,
+			bool fallThrough, bool fall2, int gravDir);
+		private delegate XnaVector2 TileCollisionDetour(
+			TileCollisionOrig orig, XnaVector2 Position, XnaVector2 Vector,
+			int Width, int Height, bool fallThrough, bool fall2, int gravDir);
 
 		private const float MaximumUnrestrictedZoom = 10F;
 		private const int VanillaRenderTargetPadding = 192;
@@ -263,6 +271,9 @@ namespace TerrariaTmlToolkit
 		private int _mainThreadAttachProbePending;
 		private bool _playerUpdateHookAttached;
 		private Hook _playerUpdateDetour;
+		private Hook _tileCollisionHook;
+		private bool _tileCollisionHookUnavailable;
+		private int _tileCollisionPassMode;
 		private readonly object _hookAttachGate = new object();
 		private volatile string _playerHookBackend = "未安装";
 		private volatile string _playerHookError = string.Empty;
@@ -378,6 +389,8 @@ namespace TerrariaTmlToolkit
 		private CheckBox _instantRespawn;
 		private CheckBox _adjustableStep;
 		private CheckBox _infiniteFlight;
+		private CheckBox _noclipHorizontal;
+		private CheckBox _noclipFull;
 		private CheckBox _adjustableMaxMinions;
 		private CheckBox _adjustableMaxBuffs;
 		private CheckBox _fullBright;
@@ -550,6 +563,11 @@ namespace TerrariaTmlToolkit
 			_stepBlocks = AddIntegerRow(
 				movement, "最大整格数", 3M, delegate { UpdateCheatSnapshot(); });
 			_infiniteFlight = AddOption(movement, "无限翅膀/火箭时间");
+			_noclipHorizontal = AddOption(
+				movement, "左右穿墙（穿过两侧墙体，保留上下碰撞）");
+			_noclipFull = AddOption(
+				movement,
+				"全穿墙（无视所有方块碰撞；重力归零，用 ↑/↓ 键升降）");
 
 			_adjustableMaxMinions = AddOption(capacity, "自定义最大仆从容量");
 			_maxMinions = AddIntegerValueRow(
@@ -638,7 +656,8 @@ namespace TerrariaTmlToolkit
 				_noPotionCooldown, _clearDebuffs, _noKnockback,
 				_noFallDamage, _lavaImmune, _fastMovement, _highJump, _infiniteExtraJumps, _adjustableStep,
 				_adjustableGravity, _adjustableMaxFallSpeed, _unlimitedFallSpeed,
-				_infiniteFlight, _adjustableMaxMinions, _adjustableMaxBuffs,
+				_infiniteFlight, _noclipHorizontal, _noclipFull,
+				_adjustableMaxMinions, _adjustableMaxBuffs,
 				_fullBright,
 				_unrestrictedView, _unrestrictedWorldBounds,
 				_improveGameUnlimitedSelection, _unlimitedPlacementInteractionRange, _concurrentAttack,
@@ -1789,6 +1808,9 @@ namespace TerrariaTmlToolkit
 					AdjustableStep = _adjustableStep != null && _adjustableStep.Checked,
 					InfiniteFlight = _infiniteFlight != null &&
 						_infiniteFlight.Checked,
+					NoclipHorizontal = _noclipHorizontal != null &&
+						_noclipHorizontal.Checked,
+					NoclipFull = _noclipFull != null && _noclipFull.Checked,
 					AdjustableMaxMinions = _adjustableMaxMinions != null &&
 						_adjustableMaxMinions.Checked,
 					AdjustableMaxBuffs = _adjustableMaxBuffs != null &&
@@ -2042,6 +2064,9 @@ namespace TerrariaTmlToolkit
 			}
 			if (snapshot.FullBright && !_lightingHooksUnavailable)
 				AttachLightingHooksOnGameThread();
+			if (_tileCollisionHook == null && !_tileCollisionHookUnavailable &&
+					(snapshot.NoclipHorizontal || snapshot.NoclipFull))
+				TryAttachTileCollisionHook();
 		}
 
 		private void TryAttachPlayerRuntimeDetour()
@@ -2798,10 +2823,15 @@ namespace TerrariaTmlToolkit
 			CheatSnapshot snapshot;
 			PreparePlayerUpdate(
 				self, out local, out forceUseGate, out snapshot);
+			int previousPassMode = _tileCollisionPassMode;
+			if (local && snapshot != null &&
+				(snapshot.NoclipHorizontal || snapshot.NoclipFull))
+				_tileCollisionPassMode = snapshot.NoclipFull ? 2 : 1;
 			try {
 				orig(self, i);
 			}
 			finally {
+				_tileCollisionPassMode = previousPassMode;
 				if (forceUseGate)
 					_forceConcurrentUseGate = false;
 			}
@@ -2858,6 +2888,8 @@ namespace TerrariaTmlToolkit
 					ApplyAdjustableStep(self, snapshot.StepBlocks);
 				if (snapshot.UnrestrictedWorldBounds)
 					ClampPlayerToRealWorld(self, snapshot.WorldEdgeSafetyTiles);
+				if (snapshot.NoclipFull)
+					ApplyFullNoclip(self);
 			}
 			catch (Exception ex) {
 				_lastGameThreadError = DescribeException(ex);
@@ -2891,6 +2923,68 @@ namespace TerrariaTmlToolkit
 				player.maxFallSpeed = float.MaxValue;
 			else if (snapshot.AdjustableMaxFallSpeed)
 				player.maxFallSpeed = Math.Max(0F, snapshot.MaxFallSpeed);
+		}
+
+		private void TryAttachTileCollisionHook()
+		{
+			if (_tileCollisionHook != null || !_gameHooksWanted)
+				return;
+			try {
+				MethodInfo method = typeof(Collision).GetMethod(
+					"TileCollision",
+					BindingFlags.Public | BindingFlags.NonPublic |
+					BindingFlags.Static,
+					null,
+					new Type[] {
+						typeof(XnaVector2), typeof(XnaVector2),
+						typeof(int), typeof(int),
+						typeof(bool), typeof(bool), typeof(int)
+					},
+					null);
+				if (method == null)
+					throw new MissingMethodException(
+						typeof(Collision).FullName,
+						"TileCollision(Vector2,Vector2,int,int,bool,bool,int)");
+				_tileCollisionHook = new Hook(
+					method, new TileCollisionDetour(TileCollisionTrainerHook));
+			}
+			catch (Exception ex) {
+				_tileCollisionHook = null;
+				_tileCollisionHookUnavailable = true;
+				_lastGameThreadError =
+					"TileCollision Hook：" + DescribeException(ex);
+			}
+		}
+
+		private XnaVector2 TileCollisionTrainerHook(
+			TileCollisionOrig orig, XnaVector2 position, XnaVector2 velocity,
+			int width, int height, bool fallThrough, bool fall2, int gravDir)
+		{
+			int mode = _tileCollisionPassMode;
+			if (mode == 0)
+				return orig(
+					position, velocity, width, height, fallThrough,
+					fall2, gravDir);
+			XnaVector2 result = orig(
+				position, velocity, width, height, fallThrough, fall2, gravDir);
+			// 2 = pass everything; 1 = free the horizontal axis only.
+			if (mode == 2)
+				return velocity;
+			return new XnaVector2(velocity.X, result.Y);
+		}
+
+		private static void ApplyFullNoclip(Player player)
+		{
+			player.gravity = 0F;
+			player.fallStart = (int)(player.position.Y / 16F);
+			float direction = player.gravDir >= 0F ? 1F : -1F;
+			float speed = Math.Max(6F, Math.Abs(player.velocity.X));
+			if (player.controlUp || player.controlJump)
+				player.velocity.Y = -speed * direction;
+			else if (player.controlDown)
+				player.velocity.Y = speed * direction;
+			else
+				player.velocity.Y *= 0.9F;
 		}
 
 		private static void ApplyShimmerPhaseOperationUnlock(
